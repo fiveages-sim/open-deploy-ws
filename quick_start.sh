@@ -84,6 +84,42 @@ launch_mode_menu() {
   echo "${choice}"
 }
 
+SDK_DIR="${WS_DIR}/src/arx-ros2-control/external/arx5-sdk"
+
+build_arx_sdk() {
+  echo -e "${YELLOW}[INFO] 编译 ARX SDK...${NC}"
+
+  if ! command -v conda >/dev/null 2>&1; then
+    echo -e "${RED}[ERROR] 未找到 conda，请先安装 Anaconda/Miniconda${NC}"
+    return 1
+  fi
+
+  local conda_base
+  conda_base=$(conda info --base 2>/dev/null)
+  # shellcheck disable=SC1090
+  source "${conda_base}/etc/profile.d/conda.sh"
+
+  if ! conda env list | grep -q "arx-py312"; then
+    echo -e "${YELLOW}[INFO] 创建 conda 环境 arx-py312...${NC}"
+    if command -v mamba >/dev/null 2>&1; then
+      mamba env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || return 1
+    else
+      conda env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || return 1
+    fi
+  fi
+
+  conda activate arx-py312 || return 1
+
+  mkdir -p "${SDK_DIR}/build"
+  cd "${SDK_DIR}/build" || return 1
+  cmake .. || return 1
+  make -j"$(nproc)" || return 1
+
+  conda deactivate
+  cd "${WS_DIR}" || return 1
+  echo -e "${GREEN}ARX SDK 编译完成！${NC}"
+}
+
 need_cmd git || exit 1
 need_cmd colcon || echo -e "${YELLOW}[WARN] 未找到 colcon，编译选项会失败（通常需要安装 ROS 发行版环境）。${NC}"
 
@@ -114,6 +150,7 @@ case "${top_choice}" in
 
       2)
     echo -e "${GREEN}开始编译真机所需包...${NC}"
+    build_arx_sdk || exit 1
     cd "${WS_DIR}" || exit 1
     colcon build --packages-up-to \
       arx_ros2_control \
