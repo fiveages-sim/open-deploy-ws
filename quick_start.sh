@@ -88,35 +88,33 @@ SDK_DIR="${WS_DIR}/src/arx-ros2-control/external/arx5-sdk"
 
 build_arx_sdk() {
   echo -e "${YELLOW}[INFO] 编译 ARX SDK...${NC}"
-
-  if ! command -v conda >/dev/null 2>&1; then
-    echo -e "${RED}[ERROR] 未找到 conda，请先安装 Anaconda/Miniconda${NC}"
-    return 1
-  fi
-
-  local conda_base
-  conda_base=$(conda info --base 2>/dev/null)
-  # shellcheck disable=SC1090
-  source "${conda_base}/etc/profile.d/conda.sh"
-
-  if ! conda env list | grep -q "arx-py312"; then
-    echo -e "${YELLOW}[INFO] 创建 conda 环境 arx-py312...${NC}"
-    if command -v mamba >/dev/null 2>&1; then
-      mamba env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || return 1
-    else
-      conda env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || return 1
+  # 在子 shell 中运行，防止 conda 的环境变量（LD_LIBRARY_PATH 等）污染后续 colcon build
+  (
+    if ! command -v conda >/dev/null 2>&1; then
+      echo -e "${RED}[ERROR] 未找到 conda，请先安装 Anaconda/Miniconda${NC}"
+      exit 1
     fi
-  fi
 
-  conda activate arx-py312 || return 1
+    conda_base=$(conda info --base 2>/dev/null)
+    # shellcheck disable=SC1090
+    source "${conda_base}/etc/profile.d/conda.sh"
 
-  mkdir -p "${SDK_DIR}/build"
-  cd "${SDK_DIR}/build" || return 1
-  cmake .. || return 1
-  make -j"$(nproc)" || return 1
+    if ! conda env list | grep -q "arx-py312"; then
+      echo -e "${YELLOW}[INFO] 创建 conda 环境 arx-py312...${NC}"
+      if command -v mamba >/dev/null 2>&1; then
+        mamba env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || exit 1
+      else
+        conda env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || exit 1
+      fi
+    fi
 
-  conda deactivate
-  cd "${WS_DIR}" || return 1
+    conda activate arx-py312 || exit 1
+
+    mkdir -p "${SDK_DIR}/build"
+    cd "${SDK_DIR}/build" || exit 1
+    cmake .. || exit 1
+    make -j"$(nproc)" || exit 1
+  ) || return 1
   echo -e "${GREEN}ARX SDK 编译完成！${NC}"
 }
 
