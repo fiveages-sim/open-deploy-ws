@@ -72,8 +72,6 @@ This package has been tested and verified to work with the following ROS2 distri
 Clone the deploy workspace and run the init script. It will sync submodules, init required nested submodules (e.g. `robot-descriptions/common`, `lina_planning`, `ocs2_robotic_assets`), checkout the correct branches, and run `rosdep install`:
 
 ```bash
-# Clone the workspace (directory name is up to you)
-git clone git@github.com:fiveages-sim/open-deploy-ws.git open-deploy-ws
 cd open-deploy-ws
 
 # One-shot init: submodules + nested submodules + branch checkout + rosdep
