@@ -78,6 +78,7 @@ cd open-deploy-ws
 
 # One-shot init: submodules + nested submodules + branch checkout + rosdep
 ./init_repo.sh
+./quick_start.sh
 ```
 
 **What `init_repo.sh` does**:
@@ -91,12 +92,8 @@ cd open-deploy-ws
 <details>
 <summary><strong>🔧 Verify OCS2 Setup (Optional)</strong></summary>
 
-After `init_repo.sh`, you can verify OCS2 by building and running a mobile manipulator demo:
+You can verify OCS2 by building and running a mobile manipulator demo:
 
-```bash
-# From workspace root (e.g. open-deploy-ws)
-./quick_start.sh
-```
 
 ```bash
 # Franka Panda
