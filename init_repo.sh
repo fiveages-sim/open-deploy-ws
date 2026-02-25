@@ -36,7 +36,7 @@ cd "$REPO_DIR"
 if [ ! -d ".git" ]; then
     print_error "当前目录不是 git 仓库！"
     print_info "请先克隆主仓库："
-    print_info "  git clone git@github.com:fiveages-sim/fa-deploy-ws.git ros2_ws"
+    print_info "  git clone git@github.com:fiveages-sim/open-deploy-ws.git open-deploy-ws"
     exit 1
 fi
 
@@ -49,6 +49,19 @@ git submodule sync
 # 初始化所有子模块（不递归，只处理第一层子模块）
 print_info "初始化所有子模块..."
 git submodule update --init
+
+# 初始化构建所需的嵌套子模块（common、manipulator/Dobot、lina_planning、ocs2_robotic_assets）
+print_info "初始化构建所需的嵌套子模块..."
+if [ -d "src/robot-descriptions" ]; then
+    (cd src/robot-descriptions && git submodule update --init common) || print_warn "robot-descriptions/common 初始化失败，跳过"
+    (cd src/robot-descriptions && git submodule update --init manipulator/Dobot) || print_warn "robot-descriptions/manipulator/Dobot 初始化失败，跳过"
+fi
+if [ -d "src/arms_ros2_control" ]; then
+    (cd src/arms_ros2_control && git submodule update --init libraries/lina_planning) || print_warn "arms_ros2_control/libraries/lina_planning 初始化失败，跳过"
+fi
+if [ -d "src/ocs2_ros2" ]; then
+    (cd src/ocs2_ros2 && git submodule update --init submodules/ocs2_robotic_assets) || print_warn "ocs2_ros2/submodules/ocs2_robotic_assets 初始化失败，跳过"
+fi
 
 # 遍历所有子模块并切换到对应分支
 print_info "将子模块切换到对应分支的最新提交..."
@@ -152,6 +165,48 @@ for submodule_path in $submodule_paths; do
     fi
 done
 
+# 将构建所需的嵌套子模块切换到对应分支并更新到最新提交
+# 格式：父目录:gitmodules 文件:config 中的 submodule 名:子模块相对路径
+print_info "将构建所需的嵌套子模块切换到对应分支..."
+for nested_spec in "src/robot-descriptions:src/robot-descriptions/.gitmodules:common:common" "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Dobot:manipulator/Dobot" "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:libraries/lina_planning:libraries/lina_planning" "src/ocs2_ros2:src/ocs2_ros2/.gitmodules:ocs2_robotic_assets:submodules/ocs2_robotic_assets"; do
+    parent_dir="${nested_spec%%:*}"
+    rest="${nested_spec#*:}"
+    gitmodules_file="${rest%%:*}"
+    rest2="${rest#*:}"
+    config_key="${rest2%%:*}"
+    relative_path="${rest2#*:}"
+    full_path="$REPO_DIR/$parent_dir/$relative_path"
+    if [ ! -d "$full_path" ]; then continue; fi
+    if ! (cd "$full_path" && git rev-parse --git-dir >/dev/null 2>&1); then continue; fi
+    branch_name=$(git config --file "$REPO_DIR/$gitmodules_file" --get "submodule.$config_key.branch" 2>/dev/null || echo "main")
+    print_info "处理嵌套子模块: $parent_dir/$relative_path -> 分支: $branch_name"
+    cd "$full_path"
+    git fetch origin 2>/dev/null || print_warn "  获取远程更新失败，继续..."
+    if git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1; then
+        actual_branch="$branch_name"
+    else
+        # 配置的分支（如 main）在远程不存在，改用远程默认分支
+        actual_branch=$(git ls-remote --symref origin HEAD 2>/dev/null | awk '/^ref: refs\/heads\// {sub(/refs\/heads\//,""); print $2; exit}')
+        if [ -z "$actual_branch" ]; then
+            print_warn "  远程分支 $branch_name 不存在且无法获取远程默认分支，跳过"
+            cd "$REPO_DIR" || exit 1
+            continue
+        fi
+        print_warn "  远程分支 $branch_name 不存在，改用远程默认分支: $actual_branch"
+    fi
+    current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
+    if [ "$current_branch" != "$actual_branch" ]; then
+        if git show-ref --verify --quiet "refs/heads/$actual_branch"; then
+            git checkout "$actual_branch" 2>/dev/null || git checkout -f "$actual_branch" 2>/dev/null || true
+        else
+            git checkout -b "$actual_branch" "origin/$actual_branch" 2>/dev/null || git checkout "$actual_branch" 2>/dev/null || true
+        fi
+    fi
+    git pull origin "$actual_branch" 2>/dev/null || print_warn "  拉取更新失败"
+    print_info "✓ $parent_dir/$relative_path 已切换到 $actual_branch 分支"
+    cd "$REPO_DIR" || exit 1
+done
+
 print_info ""
 print_info "=========================================="
 print_info "子模块初始化完成！"
@@ -159,6 +214,16 @@ print_info "=========================================="
 print_info ""
 print_info "当前子模块状态："
 git submodule status
+
+# 安装 rosdep 依赖（需已安装 ROS 与 rosdep）
+print_info ""
+print_info "安装 rosdep 依赖..."
+if command -v rosdep >/dev/null 2>&1; then
+    rosdep install --from-paths src --ignore-src -r -y || print_warn "rosdep 安装部分依赖失败，可稍后重试或检查 package.xml"
+else
+    print_warn "未找到 rosdep，请先安装 ROS 环境后手动运行："
+    print_info "  cd $REPO_DIR && rosdep install --from-paths src --ignore-src -r -y"
+fi
 
 print_info ""
 print_info "如需更新子模块到最新提交，可以运行："
