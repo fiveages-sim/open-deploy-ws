@@ -6,18 +6,7 @@
 	path = src/ocs2_ros2
 	url = git@github.com:legubiao/ocs2_ros2.git
 	branch = ros2
-[submodule "src/robot-descriptions-dobot"]
-	path = src/robot-descriptions-dobot
-	url = git@github.com:fiveages-sim/robot-descriptions-dobot.git
+[submodule "src/robot-descriptions"]
+	path = src/robot-descriptions
+	url = git@github.com:fiveages-sim/robot_descriptions.git
 	branch = main
-[submodule "src/robot-descriptions-common"]
-	path = src/robot-descriptions-common
-	url = git@github.com:fiveages-sim/robot-descriptions-common.git
-	branch = main
-[submodule "src/dobot-cr-ros2-control"]
-	path = src/dobot-cr-ros2-control
-	url = git@github.com:fiveages-sim/dobot-cr-ros2-control.git
-	branch = main
-[submodule "src/vla_http_bridge"]
-	path = src/vla_http_bridge
-	url = git@github.com:fiveages-sim/vla_http_bridge.git
