@@ -36,9 +36,22 @@ cd "$REPO_DIR"
 if [ ! -d ".git" ]; then
     print_error "当前目录不是 git 仓库！"
     print_info "请先克隆主仓库："
-    print_info "  git clone git@github.com:fiveages-sim/open-deploy-ws.git open-deploy-ws"
+    print_info "  git clone git@github.com:fiveages-sim/open-deploy-ws.git ros2_ws"
     exit 1
 fi
+
+# 选择初始化模式
+echo ""
+echo "请选择初始化模式："
+echo "  1) 仅初始化 public 仓库（适用于外部用户，无需私有仓库访问权限）"
+echo "  2) 初始化所有仓库，包含 private 仓库（需要内部仓库访问权限）"
+read -rp "请输入选项 [1/2]（默认: 1）: " mode_choice
+case "$mode_choice" in
+    2) INIT_MODE="private" ;;
+    *) INIT_MODE="public" ;;
+esac
+print_info "初始化模式: $INIT_MODE"
+echo ""
 
 print_info "开始初始化子模块..."
 
@@ -53,14 +66,39 @@ git submodule update --init
 # 初始化构建所需的嵌套子模块（common、manipulator/Dobot、lina_planning、ocs2_robotic_assets）
 print_info "初始化构建所需的嵌套子模块..."
 if [ -d "src/robot-descriptions" ]; then
+    # public 仓库
     (cd src/robot-descriptions && git submodule update --init common) || print_warn "robot-descriptions/common 初始化失败，跳过"
     (cd src/robot-descriptions && git submodule update --init manipulator/Dobot) || print_warn "robot-descriptions/manipulator/Dobot 初始化失败，跳过"
+    (cd src/robot-descriptions && git submodule update --init manipulator/ARX) || print_warn "robot-descriptions/manipulator/ARX 初始化失败，跳过"
+    (cd src/robot-descriptions && git submodule update --init quadruped) || print_warn "robot-descriptions/quadruped 初始化失败，跳过"
+    if [ "$INIT_MODE" = "private" ]; then
+        # private 仓库
+        (cd src/robot-descriptions && git submodule update --init manipulator/Tianji) || print_warn "robot-descriptions/manipulator/Tianji 初始化失败，跳过"
+        (cd src/robot-descriptions && git submodule update --init manipulator/Rokae) || print_warn "robot-descriptions/manipulator/Rokae 初始化失败，跳过"
+        (cd src/robot-descriptions && git submodule update --init "humanoid/FiveAges/fiveages_w1_description") || print_warn "robot-descriptions/humanoid/FiveAges/fiveages_w1_description 初始化失败，跳过"
+        (cd src/robot-descriptions && git submodule update --init "humanoid/FiveAges/fiveages_w2_description") || print_warn "robot-descriptions/humanoid/FiveAges/fiveages_w2_description 初始化失败，跳过"
+        (cd src/robot-descriptions && git submodule update --init humanoid/Ubtech) || print_warn "robot-descriptions/humanoid/Ubtech 初始化失败，跳过"
+    fi
 fi
 if [ -d "src/arms_ros2_control" ]; then
-    (cd src/arms_ros2_control && git submodule update --init libraries/lina_planning) || print_warn "arms_ros2_control/libraries/lina_planning 初始化失败，跳过"
+    # public 仓库
+    (cd src/arms_ros2_control && git submodule update --init hardwares/marvin_ros2_control) || print_warn "arms_ros2_control/hardwares/marvin_ros2_control 初始化失败，跳过"
+    (cd src/arms_ros2_control && git submodule update --init hardwares/unitree_ros2_control) || print_warn "arms_ros2_control/hardwares/unitree_ros2_control 初始化失败，跳过"
+    (cd src/arms_ros2_control && git submodule update --init hardwares/dobot_ros2_control) || print_warn "arms_ros2_control/hardwares/dobot_ros2_control 初始化失败，跳过"
+    (cd src/arms_ros2_control && git submodule update --init hardwares/modbus_ros2_control) || print_warn "arms_ros2_control/hardwares/modbus_ros2_control 初始化失败，跳过"
+    (cd src/arms_ros2_control && git submodule update --init hardwares/arx_ros2_control) || print_warn "arms_ros2_control/hardwares/arx_ros2_control 初始化失败，跳过"
+    if [ "$INIT_MODE" = "private" ]; then
+        # private 仓库
+        (cd src/arms_ros2_control && git submodule update --init hardwares/rokae_ros2_control) || print_warn "arms_ros2_control/hardwares/rokae_ros2_control 初始化失败，跳过"
+        (cd src/arms_ros2_control && git submodule update --init hardwares/eyou_ros2_control) || print_warn "arms_ros2_control/hardwares/eyou_ros2_control 初始化失败，跳过"
+        (cd src/arms_ros2_control && git submodule update --init libraries/lina_planning) || print_warn "arms_ros2_control/libraries/lina_planning 初始化失败，跳过"
+        (cd src/arms_ros2_control && git submodule update --init libraries/ocs2_humanoid) || print_warn "arms_ros2_control/libraries/ocs2_humanoid 初始化失败，跳过"
+    fi
 fi
 if [ -d "src/ocs2_ros2" ]; then
+    # public 仓库
     (cd src/ocs2_ros2 && git submodule update --init submodules/ocs2_robotic_assets) || print_warn "ocs2_ros2/submodules/ocs2_robotic_assets 初始化失败，跳过"
+    (cd src/ocs2_ros2 && git submodule update --init submodules/plane_segmentation_ros2) || print_warn "ocs2_ros2/submodules/plane_segmentation_ros2 初始化失败，跳过"
 fi
 
 # 遍历所有子模块并切换到对应分支
@@ -168,7 +206,39 @@ done
 # 将构建所需的嵌套子模块切换到对应分支并更新到最新提交
 # 格式：父目录:gitmodules 文件:config 中的 submodule 名:子模块相对路径
 print_info "将构建所需的嵌套子模块切换到对应分支..."
-for nested_spec in "src/robot-descriptions:src/robot-descriptions/.gitmodules:common:common" "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Dobot:manipulator/Dobot" "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:libraries/lina_planning:libraries/lina_planning" "src/ocs2_ros2:src/ocs2_ros2/.gitmodules:ocs2_robotic_assets:submodules/ocs2_robotic_assets"; do
+# public 嵌套子模块
+nested_specs=(
+    # robot-descriptions: public
+    "src/robot-descriptions:src/robot-descriptions/.gitmodules:common:common"
+    "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Dobot:manipulator/Dobot"
+    "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/ARX:manipulator/ARX"
+    "src/robot-descriptions:src/robot-descriptions/.gitmodules:quadruped:quadruped"
+    # arms_ros2_control: public
+    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/marvin_ros2_control:hardwares/marvin_ros2_control"
+    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/unitree_ros2_control:hardwares/unitree_ros2_control"
+    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/dobot_ros2_control:hardwares/dobot_ros2_control"
+    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/modbus_ros2_control:hardwares/modbus_ros2_control"
+    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/arx_ros2_control:hardwares/arx_ros2_control"
+    # ocs2_ros2: public
+    "src/ocs2_ros2:src/ocs2_ros2/.gitmodules:ocs2_robotic_assets:submodules/ocs2_robotic_assets"
+    "src/ocs2_ros2:src/ocs2_ros2/.gitmodules:submodules/plane_segmentation_ros2:submodules/plane_segmentation_ros2"
+)
+if [ "$INIT_MODE" = "private" ]; then
+    nested_specs+=(
+        # robot-descriptions: private
+        "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Tianji:manipulator/Tianji"
+        "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Rokae:manipulator/Rokae"
+        "src/robot-descriptions:src/robot-descriptions/.gitmodules:humanoid/FiveAges/fiveages_w1_description:humanoid/FiveAges/fiveages_w1_description"
+        "src/robot-descriptions:src/robot-descriptions/.gitmodules:humanoid/FiveAges/fiveages_w2_description:humanoid/FiveAges/fiveages_w2_description"
+        "src/robot-descriptions:src/robot-descriptions/.gitmodules:humanoid/Ubtech:humanoid/Ubtech"
+        # arms_ros2_control: private
+        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/rokae_ros2_control:hardwares/rokae_ros2_control"
+        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/eyou_ros2_control:hardwares/eyou_ros2_control"
+        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:libraries/lina_planning:libraries/lina_planning"
+        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:libraries/ocs2_humanoid:libraries/ocs2_humanoid"
+    )
+fi
+for nested_spec in "${nested_specs[@]}"; do
     parent_dir="${nested_spec%%:*}"
     rest="${nested_spec#*:}"
     gitmodules_file="${rest%%:*}"
