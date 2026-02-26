@@ -99,7 +99,7 @@ build_arx_sdk() {
     # shellcheck disable=SC1090
     source "${conda_base}/etc/profile.d/conda.sh"
 
-    if ! conda env list | grep -q "arx-py312"; then
+    if ! conda env list | grep -qE "^arx-py312[[:space:]]"; then
       echo -e "${YELLOW}[INFO] 创建 conda 环境 arx-py312...${NC}"
       if command -v mamba >/dev/null 2>&1; then
         mamba env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || exit 1
