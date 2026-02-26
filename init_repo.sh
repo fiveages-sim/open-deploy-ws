@@ -53,6 +53,36 @@ esac
 print_info "初始化模式: $INIT_MODE"
 echo ""
 
+# 嵌套子模块可见性配置文件（可编辑此文件以调整 public/private）
+VISIBILITY_CONF="$REPO_DIR/submodules_visibility.conf"
+if [ ! -f "$VISIBILITY_CONF" ]; then
+    print_error "未找到配置文件: $VISIBILITY_CONF"
+    exit 1
+fi
+trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; echo "${v%"${v##*[![:space:]]}"}"; }
+# 从配置文件加载嵌套子模块列表：格式 父目录|相对路径|public|private
+NESTED_PUBLIC_SPECS=()
+NESTED_PRIVATE_SPECS=()
+while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    IFS='|' read -r parent_dir relative_path visibility <<< "$line"
+    parent_dir=$(trim "$parent_dir")
+    relative_path=$(trim "$relative_path")
+    visibility=$(trim "$visibility")
+    gitmodules_file="${parent_dir}/.gitmodules"
+    spec="${parent_dir}:${gitmodules_file}:${relative_path}"
+    case "$visibility" in
+        public)  NESTED_PUBLIC_SPECS+=("$spec") ;;
+        private) NESTED_PRIVATE_SPECS+=("$spec") ;;
+        *)       print_warn "未知可见性 '$visibility'，跳过: $parent_dir/$relative_path" ;;
+    esac
+done < "$VISIBILITY_CONF"
+print_info "已从 $VISIBILITY_CONF 加载嵌套子模块配置（public: ${#NESTED_PUBLIC_SPECS[@]} 项, private: ${#NESTED_PRIVATE_SPECS[@]} 项）"
+echo ""
+
 print_info "开始初始化子模块..."
 
 # 同步子模块配置（不递归，只处理第一层子模块）
@@ -63,42 +93,23 @@ git submodule sync
 print_info "初始化所有子模块..."
 git submodule update --init
 
-# 初始化构建所需的嵌套子模块（common、manipulator/Dobot、lina_planning、ocs2_robotic_assets）
-print_info "初始化构建所需的嵌套子模块..."
-if [ -d "src/robot-descriptions" ]; then
-    # public 仓库
-    (cd src/robot-descriptions && git submodule update --init common) || print_warn "robot-descriptions/common 初始化失败，跳过"
-    (cd src/robot-descriptions && git submodule update --init manipulator/Dobot) || print_warn "robot-descriptions/manipulator/Dobot 初始化失败，跳过"
-    (cd src/robot-descriptions && git submodule update --init manipulator/ARX) || print_warn "robot-descriptions/manipulator/ARX 初始化失败，跳过"
-    (cd src/robot-descriptions && git submodule update --init quadruped) || print_warn "robot-descriptions/quadruped 初始化失败，跳过"
-    if [ "$INIT_MODE" = "private" ]; then
-        # private 仓库
-        (cd src/robot-descriptions && git submodule update --init manipulator/Tianji) || print_warn "robot-descriptions/manipulator/Tianji 初始化失败，跳过"
-        (cd src/robot-descriptions && git submodule update --init manipulator/Rokae) || print_warn "robot-descriptions/manipulator/Rokae 初始化失败，跳过"
-        (cd src/robot-descriptions && git submodule update --init "humanoid/FiveAges/fiveages_w1_description") || print_warn "robot-descriptions/humanoid/FiveAges/fiveages_w1_description 初始化失败，跳过"
-        (cd src/robot-descriptions && git submodule update --init "humanoid/FiveAges/fiveages_w2_description") || print_warn "robot-descriptions/humanoid/FiveAges/fiveages_w2_description 初始化失败，跳过"
-        (cd src/robot-descriptions && git submodule update --init humanoid/Ubtech) || print_warn "robot-descriptions/humanoid/Ubtech 初始化失败，跳过"
-    fi
-fi
-if [ -d "src/arms_ros2_control" ]; then
-    # public 仓库
-    (cd src/arms_ros2_control && git submodule update --init hardwares/marvin_ros2_control) || print_warn "arms_ros2_control/hardwares/marvin_ros2_control 初始化失败，跳过"
-    (cd src/arms_ros2_control && git submodule update --init hardwares/unitree_ros2_control) || print_warn "arms_ros2_control/hardwares/unitree_ros2_control 初始化失败，跳过"
-    (cd src/arms_ros2_control && git submodule update --init hardwares/dobot_ros2_control) || print_warn "arms_ros2_control/hardwares/dobot_ros2_control 初始化失败，跳过"
-    (cd src/arms_ros2_control && git submodule update --init hardwares/modbus_ros2_control) || print_warn "arms_ros2_control/hardwares/modbus_ros2_control 初始化失败，跳过"
-    (cd src/arms_ros2_control && git submodule update --init hardwares/arx_ros2_control) || print_warn "arms_ros2_control/hardwares/arx_ros2_control 初始化失败，跳过"
-    if [ "$INIT_MODE" = "private" ]; then
-        # private 仓库
-        (cd src/arms_ros2_control && git submodule update --init hardwares/rokae_ros2_control) || print_warn "arms_ros2_control/hardwares/rokae_ros2_control 初始化失败，跳过"
-        (cd src/arms_ros2_control && git submodule update --init hardwares/eyou_ros2_control) || print_warn "arms_ros2_control/hardwares/eyou_ros2_control 初始化失败，跳过"
-        (cd src/arms_ros2_control && git submodule update --init libraries/lina_planning) || print_warn "arms_ros2_control/libraries/lina_planning 初始化失败，跳过"
-        (cd src/arms_ros2_control && git submodule update --init libraries/ocs2_humanoid) || print_warn "arms_ros2_control/libraries/ocs2_humanoid 初始化失败，跳过"
-    fi
-fi
-if [ -d "src/ocs2_ros2" ]; then
-    # public 仓库
-    (cd src/ocs2_ros2 && git submodule update --init submodules/ocs2_robotic_assets) || print_warn "ocs2_ros2/submodules/ocs2_robotic_assets 初始化失败，跳过"
-    (cd src/ocs2_ros2 && git submodule update --init submodules/plane_segmentation_ros2) || print_warn "ocs2_ros2/submodules/plane_segmentation_ros2 初始化失败，跳过"
+# 初始化构建所需的嵌套子模块（根据 submodules_visibility.conf）
+print_info "初始化构建所需的嵌套子模块（根据配置文件）..."
+for spec in "${NESTED_PUBLIC_SPECS[@]}"; do
+    parent_dir="${spec%%:*}"
+    rest="${spec#*:}"
+    relative_path="${rest#*:}"
+    [ ! -d "$parent_dir" ] && continue
+    (cd "$parent_dir" && git submodule update --init "$relative_path") || print_warn "$parent_dir/$relative_path 初始化失败，跳过"
+done
+if [ "$INIT_MODE" = "private" ]; then
+    for spec in "${NESTED_PRIVATE_SPECS[@]}"; do
+        parent_dir="${spec%%:*}"
+        rest="${spec#*:}"
+        relative_path="${rest#*:}"
+        [ ! -d "$parent_dir" ] && continue
+        (cd "$parent_dir" && git submodule update --init "$relative_path") || print_warn "$parent_dir/$relative_path 初始化失败，跳过"
+    done
 fi
 
 # 遍历所有子模块并切换到对应分支
@@ -203,52 +214,27 @@ for submodule_path in $submodule_paths; do
     fi
 done
 
-# 将构建所需的嵌套子模块切换到对应分支并更新到最新提交
-# 格式：父目录:gitmodules 文件:config 中的 submodule 名:子模块相对路径
+# 将构建所需的嵌套子模块切换到对应分支并更新到最新提交（根据配置文件）
 print_info "将构建所需的嵌套子模块切换到对应分支..."
-# public 嵌套子模块
-nested_specs=(
-    # robot-descriptions: public
-    "src/robot-descriptions:src/robot-descriptions/.gitmodules:common:common"
-    "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Dobot:manipulator/Dobot"
-    "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/ARX:manipulator/ARX"
-    "src/robot-descriptions:src/robot-descriptions/.gitmodules:quadruped:quadruped"
-    # arms_ros2_control: public
-    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/marvin_ros2_control:hardwares/marvin_ros2_control"
-    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/unitree_ros2_control:hardwares/unitree_ros2_control"
-    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/dobot_ros2_control:hardwares/dobot_ros2_control"
-    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/modbus_ros2_control:hardwares/modbus_ros2_control"
-    "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/arx_ros2_control:hardwares/arx_ros2_control"
-    # ocs2_ros2: public
-    "src/ocs2_ros2:src/ocs2_ros2/.gitmodules:ocs2_robotic_assets:submodules/ocs2_robotic_assets"
-    "src/ocs2_ros2:src/ocs2_ros2/.gitmodules:submodules/plane_segmentation_ros2:submodules/plane_segmentation_ros2"
-)
+nested_specs=("${NESTED_PUBLIC_SPECS[@]}")
 if [ "$INIT_MODE" = "private" ]; then
-    nested_specs+=(
-        # robot-descriptions: private
-        "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Tianji:manipulator/Tianji"
-        "src/robot-descriptions:src/robot-descriptions/.gitmodules:manipulator/Rokae:manipulator/Rokae"
-        "src/robot-descriptions:src/robot-descriptions/.gitmodules:humanoid/FiveAges/fiveages_w1_description:humanoid/FiveAges/fiveages_w1_description"
-        "src/robot-descriptions:src/robot-descriptions/.gitmodules:humanoid/FiveAges/fiveages_w2_description:humanoid/FiveAges/fiveages_w2_description"
-        "src/robot-descriptions:src/robot-descriptions/.gitmodules:humanoid/Ubtech:humanoid/Ubtech"
-        # arms_ros2_control: private
-        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/rokae_ros2_control:hardwares/rokae_ros2_control"
-        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:hardwares/eyou_ros2_control:hardwares/eyou_ros2_control"
-        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:libraries/lina_planning:libraries/lina_planning"
-        "src/arms_ros2_control:src/arms_ros2_control/.gitmodules:libraries/ocs2_humanoid:libraries/ocs2_humanoid"
-    )
+    nested_specs+=("${NESTED_PRIVATE_SPECS[@]}")
 fi
 for nested_spec in "${nested_specs[@]}"; do
     parent_dir="${nested_spec%%:*}"
     rest="${nested_spec#*:}"
     gitmodules_file="${rest%%:*}"
-    rest2="${rest#*:}"
-    config_key="${rest2%%:*}"
-    relative_path="${rest2#*:}"
+    relative_path="${rest#*:}"
     full_path="$REPO_DIR/$parent_dir/$relative_path"
     if [ ! -d "$full_path" ]; then continue; fi
     if ! (cd "$full_path" && git rev-parse --git-dir >/dev/null 2>&1); then continue; fi
-    branch_name=$(git config --file "$REPO_DIR/$gitmodules_file" --get "submodule.$config_key.branch" 2>/dev/null || echo "main")
+    gf="$REPO_DIR/$gitmodules_file"
+    branch_name=$(git config --file "$gf" --get "submodule.$relative_path.branch" 2>/dev/null)
+    if [ -z "$branch_name" ]; then
+        config_key=$(git config --file "$gf" --get-regexp 'submodule\..*\.path' 2>/dev/null | awk -v p="$relative_path" '$2==p {k=$1; gsub(/^submodule\.|\.path$/,"",k); print k; exit}')
+        branch_name=$(git config --file "$gf" --get "submodule.${config_key}.branch" 2>/dev/null)
+    fi
+    branch_name=${branch_name:-main}
     print_info "处理嵌套子模块: $parent_dir/$relative_path -> 分支: $branch_name"
     cd "$full_path"
     git fetch origin 2>/dev/null || print_warn "  获取远程更新失败，继续..."
