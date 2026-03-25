@@ -88,33 +88,68 @@ SDK_DIR="${WS_DIR}/src/arx-ros2-control/external/arx5-sdk"
 
 build_arx_sdk() {
   echo -e "${YELLOW}[INFO] 编译 ARX SDK...${NC}"
-  # 在子 shell 中运行，防止 conda 的环境变量（LD_LIBRARY_PATH 等）污染后续 colcon build
+
+  if ! command -v conda >/dev/null 2>&1; then
+    echo -e "${RED}[ERROR] 未找到 conda，请先安装 Anaconda/Miniconda${NC}"
+    return 1
+  fi
+
+  local conda_base
+  conda_base=$(conda info --base 2>/dev/null)
+  # shellcheck disable=SC1090
+  source "${conda_base}/etc/profile.d/conda.sh"
+
+  if ! conda env list | grep -qE "^arx-py312[[:space:]]"; then
+    echo -e "${YELLOW}[INFO] 创建 conda 环境 arx-py312...${NC}"
+    if command -v mamba >/dev/null 2>&1; then
+      mamba env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || return 1
+    else
+      conda env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || return 1
+    fi
+  fi
+
+  # ── 第一步：系统 GCC 编译 C++ 库，供 ROS2 运行时使用 ─────────────
+  # conda 环境内含 cxx-compiler（GCC 14）和 conda 版 KDL，若在 conda 激活状态下编译
+  # libArxJointController.so，会与 ROS2 运行时的系统 KDL 产生 ABI 不兼容导致 segfault。
+  # 因此必须在系统 GCC（/usr/bin/g++）+ 系统 KDL（ROS2 Jazzy）下单独编译。
+  echo -e "${YELLOW}[INFO] 第一步：使用系统 GCC 编译 libArxJointController.so（供 ROS2 使用）...${NC}"
   (
-    if ! command -v conda >/dev/null 2>&1; then
-      echo -e "${RED}[ERROR] 未找到 conda，请先安装 Anaconda/Miniconda${NC}"
-      exit 1
+    ros_distro="${ROS_DISTRO:-jazzy}"
+    [ -f "/opt/ros/${ros_distro}/setup.bash" ] && source "/opt/ros/${ros_distro}/setup.bash"
+
+    # cmake 配置阶段需要 pybind11（python/CMakeLists.txt 中 REQUIRED），
+    # 但我们只编译 C++ 目标，不实际链接它。从 conda 获取路径仅用于配置通过。
+    pybind11_dir=$(conda run -n arx-py312 python3 -c \
+      "import pybind11; print(pybind11.get_cmake_dir())" 2>/dev/null || true)
+
+    cmake_args=(-DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_C_COMPILER=/usr/bin/gcc)
+    if [ -n "${pybind11_dir}" ]; then
+      cmake_args+=("-Dpybind11_DIR=${pybind11_dir}")
     fi
-
-    conda_base=$(conda info --base 2>/dev/null)
-    # shellcheck disable=SC1090
-    source "${conda_base}/etc/profile.d/conda.sh"
-
-    if ! conda env list | grep -qE "^arx-py312[[:space:]]"; then
-      echo -e "${YELLOW}[INFO] 创建 conda 环境 arx-py312...${NC}"
-      if command -v mamba >/dev/null 2>&1; then
-        mamba env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || exit 1
-      else
-        conda env create -f "${SDK_DIR}/conda_environments/py312_environment.yaml" || exit 1
-      fi
-    fi
-
-    conda activate arx-py312 || exit 1
 
     mkdir -p "${SDK_DIR}/build"
     cd "${SDK_DIR}/build" || exit 1
-    cmake .. || exit 1
-    make -j"$(nproc)" || exit 1
+    cmake .. "${cmake_args[@]}" || exit 1
+    make -j"$(nproc)" ArxJointController ArxCartesianController || exit 1
   ) || return 1
+  echo -e "${GREEN}[INFO] 第一步完成：libArxJointController.so 已生成${NC}"
+
+  # ── 第二步：conda 环境编译 Python 绑定 ───────────────────────────
+  # arx5_interface.cpython-312-x86_64-linux-gnu.so 需要 pybind11 和 conda Python，
+  # 输出到 python/ 目录，供独立 Python 脚本调用，与 ROS2 运行时无关。
+  echo -e "${YELLOW}[INFO] 第二步：使用 conda 环境编译 Python 绑定...${NC}"
+  (
+    conda activate arx-py312 || exit 1
+    ros_distro="${ROS_DISTRO:-jazzy}"
+    [ -f "/opt/ros/${ros_distro}/setup.bash" ] && source "/opt/ros/${ros_distro}/setup.bash"
+
+    mkdir -p "${SDK_DIR}/build-conda"
+    cd "${SDK_DIR}/build-conda" || exit 1
+    cmake .. || exit 1
+    make -j"$(nproc)" arx5_interface || exit 1
+  ) || return 1
+  echo -e "${GREEN}[INFO] 第二步完成：arx5_interface Python 绑定已生成${NC}"
+
   echo -e "${GREEN}ARX SDK 编译完成！${NC}"
 }
 
