@@ -16,6 +16,23 @@ open-deploy-ws/
 
 ## 快速开始
 
+在开始前，请先完成 **ROS 2 Jazzy 及 rosdep 环境** 安装（Ubuntu 24.04）：
+
+```bash
+# 1. 安装 ROS 2 管理工具（fishros）
+wget http://fishros.com/install -O fishros && bash fishros
+
+# 2. 安装 ROS 2 Jazzy 桌面版
+sudo apt update
+sudo apt install ros-jazzy-desktop
+
+# 3. 初始化 rosdep（首次在本机使用 rosdep 时需要）
+sudo rosdep init
+rosdep update
+```
+
+完成以上步骤后，再执行仓库初始化：
+
 ```bash
 git clone git@github.com:fiveages-sim/open-deploy-ws.git ros2_ws
 cd ros2_ws

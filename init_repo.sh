@@ -285,28 +285,4 @@ print_info ""
 print_info "如需更新子模块到最新提交，可以运行："
 print_info "  git submodule update --remote"
 
-# 编译
-print_info ""
-print_info "=========================================="
-print_info "开始编译..."
-print_info "=========================================="
-if command -v colcon >/dev/null 2>&1; then
-    colcon build --packages-up-to \
-      ocs2_arm_controller \
-      basic_joint_controller \
-      jodell_description \
-      changingtek_description \
-      linkerhand_description \
-      robotiq_description \
-      topic_based_ros2_control \
-      --symlink-install
-    if [ $? -eq 0 ]; then
-        print_info "编译完成！"
-    else
-        print_warn "编译过程中出现错误"
-    fi
-else
-    print_warn "未找到 colcon，请先安装 ROS 环境后手动运行："
-    print_info "  cd $REPO_DIR && colcon build --packages-up-to ocs2_arm_controller basic_joint_controller jodell_description changingtek_description linkerhand_description robotiq_description topic_based_ros2_control --symlink-install"
-fi
 
