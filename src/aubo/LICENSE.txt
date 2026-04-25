@@ -1,0 +1,15 @@
+AUBO robotSDK
+
+© 2019 AUBO Robotics China
+
+See separate documentation for Open Source Licenses used in AUBO robotSDK.
+
+Terms
+=================
+OEM   An OEM customer is a company that sells/resells AUBO robotics applications based on OEM's own software solutions.
+
+
+License Grant
+=================
+AUBO Robotics China ("AUBO") hereby grants OEM customer ("OEM") a non-transferable, non-exclusive license to use the provided AUBO robot SDK for use in their OEM applications.
+As OEM you are permitted to link your application with AUBO robotSDK and to make an unlimited amout of copies of your applications and granted to distribute and sell your applications that is using the robotSDK.
