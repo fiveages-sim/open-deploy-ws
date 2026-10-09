@@ -48,9 +48,17 @@ rosdep update
 完成以上步骤后，再执行仓库初始化：
 
 ```bash
-git clone git@github.com:fiveages-sim/open-deploy-ws.git ros2_ws
+git clone https://github.com/fiveages-sim/open-deploy-ws.git ros2_ws
+# 已配置 SSH 密钥时也可以：
+# git clone git@github.com:fiveages-sim/open-deploy-ws.git ros2_ws
 cd ros2_ws
 ./init_repo.sh
+```
+
+容器或 CI（无法按回车）请用非交互参数，默认与交互菜单一致：
+
+```bash
+./init_repo.sh --public --ocs2=deb --arms=source --common=source
 ```
 
 ### `init_repo.sh` 操作说明
@@ -98,14 +106,36 @@ rosdep install --from-paths src --ignore-src -r -y
 
 deb 版本与仓库见 [`deb_versions.conf`](deb_versions.conf)；嵌套 public/private 见 [`submodules_visibility.conf`](submodules_visibility.conf)。
 
+### 非交互参数与环境变量
+
+`./init_repo.sh --help` 可查看完整列表。常用项：
+
+| 参数 | 环境变量 | 含义 |
+|------|----------|------|
+| `--public` / `--private` | `OPEN_DEPLOY_VISIBILITY` | 嵌套可见性 |
+| `--ocs2=deb\|source` | `OPEN_DEPLOY_OCS2` | ocs2 安装方式 |
+| `--arms=deb\|source` | `OPEN_DEPLOY_ARMS` | arms 安装方式 |
+| `--common=deb\|source` | `OPEN_DEPLOY_COMMON` | common 安装方式 |
+| `--https` | `OPEN_DEPLOY_GIT_HTTPS=1` | 强制 HTTPS 拉取 GitHub 子模块 |
+| `-y` / `--yes` | `OPEN_DEPLOY_YES=1` | 自动确认清理源码目录 |
+
+传入 `--public`、`--private` 或任一模块参数即进入非交互模式，不再等待键盘输入。
+
+### SSH 与 HTTPS
+
+`.gitmodules`（以及 arms / robot-descriptions 的嵌套 `.gitmodules`）使用 `git@github.com:`。在没有 `ssh` 二进制、或 public 模式且没有可用 SSH 密钥的环境中，`git submodule update` 会报 `error: cannot run ssh: No such file or directory`。
+
+**仅设置** `git config url.https://github.com/.insteadOf git@github.com:` **不能可靠修好** 子模块更新：嵌套仓会读自己的 `.gitmodules`，并直接走 ssh。本脚本会在需要时把 GitHub SSH URL **改写为 HTTPS**，再 `submodule sync` / `update`，结束后还原 `.gitmodules`，避免把 URL 变更写进工作区。已有 SSH 密钥的用户（尤其是 private 嵌套）保持原 SSH URL。也可显式传 `--https`。
+
 ### 脚本随后会
 
 1. 同步并初始化选为 **source** 的顶层子模块（选 deb 的跳过；若已有源码会提示清理）
 2. 按可见性与配置初始化嵌套子模块（父仓或 common 为 deb 时跳过）
-3. 将源码子模块切换到配置分支并拉取最新提交
-4. 对源码路径运行 `rosdep install`
-5. 安装选为 deb 的包（顺序：ocs2 → common → arms）
-6. 将选择写入本地 `.core_module_mode`（已 gitignore），供下次默认参考
+3. public 模式下对未初始化的空 private / hardware 嵌套目录写入 `COLCON_IGNORE`，避免 colcon 扫描空目录
+4. 将源码子模块切换到配置分支并拉取最新提交
+5. 对源码路径运行 `rosdep install`
+6. 安装选为 deb 的包（顺序：ocs2 → common → arms）
+7. 将选择写入本地 `.core_module_mode`（已 gitignore），供下次默认参考
 
 ## 测试环境
 

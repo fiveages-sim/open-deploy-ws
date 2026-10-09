@@ -48,9 +48,17 @@ rosdep update
 After completing the steps above, initialize the repository:
 
 ```bash
-git clone git@github.com:fiveages-sim/open-deploy-ws.git ros2_ws
+git clone https://github.com/fiveages-sim/open-deploy-ws.git ros2_ws
+# If SSH keys are already set up:
+# git clone git@github.com:fiveages-sim/open-deploy-ws.git ros2_ws
 cd ros2_ws
 ./init_repo.sh
+```
+
+For containers or CI (no TTY to press Enter), use the non-interactive flags. Defaults match the interactive menu:
+
+```bash
+./init_repo.sh --public --ocs2=deb --arms=source --common=source
 ```
 
 ### `init_repo.sh` usage
@@ -98,14 +106,36 @@ rosdep install --from-paths src --ignore-src -r -y
 
 Deb versions and repositories are defined in [`deb_versions.conf`](deb_versions.conf); nested public/private visibility is defined in [`submodules_visibility.conf`](submodules_visibility.conf).
 
+### Non-interactive flags and environment variables
+
+Run `./init_repo.sh --help` for the full list. Common options:
+
+| Flag | Environment variable | Meaning |
+|------|----------------------|---------|
+| `--public` / `--private` | `OPEN_DEPLOY_VISIBILITY` | Nested visibility |
+| `--ocs2=deb\|source` | `OPEN_DEPLOY_OCS2` | ocs2 install mode |
+| `--arms=deb\|source` | `OPEN_DEPLOY_ARMS` | arms install mode |
+| `--common=deb\|source` | `OPEN_DEPLOY_COMMON` | common install mode |
+| `--https` | `OPEN_DEPLOY_GIT_HTTPS=1` | Force HTTPS for GitHub submodules |
+| `-y` / `--yes` | `OPEN_DEPLOY_YES=1` | Auto-confirm source-tree cleanup |
+
+Passing `--public`, `--private`, or any module flag enters non-interactive mode and does not wait for keyboard input.
+
+### SSH vs HTTPS
+
+`.gitmodules` (and the nested `.gitmodules` in arms / robot-descriptions) uses `git@github.com:`. On hosts without an `ssh` binary, or in public mode with no usable SSH keys, `git submodule update` fails with `error: cannot run ssh: No such file or directory`.
+
+Setting `git config url.https://github.com/.insteadOf git@github.com:` **alone does not reliably fix** submodule updates: nested repos read their own `.gitmodules` and invoke `ssh` directly. This script rewrites GitHub SSH URLs **to HTTPS**, then runs `submodule sync` / `update`, and restores `.gitmodules` afterwards so the working tree is not left dirty. Users who already have SSH keys (especially for private nested modules) keep the original SSH URLs. Pass `--https` to force HTTPS.
+
 ### What the script does next
 
 1. Sync and initialize top-level submodules selected as **source** (skip those selected as deb; if source trees already exist, prompt to clean them)
 2. Initialize nested submodules according to visibility and configuration (skipped when the parent repository or common is installed as deb)
-3. Check out configured branches for source submodules and pull the latest commits
-4. Run `rosdep install` on source paths
-5. Install packages selected as deb (order: ocs2 → common → arms)
-6. Persist choices to local `.core_module_mode` (gitignored) for use as defaults next time
+3. In public mode, write `COLCON_IGNORE` into empty uninitialized private / hardware nested directories so colcon does not scan them
+4. Check out configured branches for source submodules and pull the latest commits
+5. Run `rosdep install` on source paths
+6. Install packages selected as deb (order: ocs2 → common → arms)
+7. Persist choices to local `.core_module_mode` (gitignored) for use as defaults next time
 
 ## Tested environment
 
