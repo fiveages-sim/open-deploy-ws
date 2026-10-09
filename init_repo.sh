@@ -1184,8 +1184,16 @@ cleanup_deb_module_sources
 
 print_info "开始初始化子模块..."
 
-# 中断时也还原 .gitmodules，避免工作区留下 HTTPS URL 改写
-trap 'restore_all_rewritten_gitmodules' EXIT INT TERM
+# 正常结束与中断都还原 .gitmodules；INT/TERM 必须随后退出，避免半截 clone 后继续跑
+restore_https_gitmodules_on_exit() {
+    restore_all_rewritten_gitmodules
+}
+restore_https_gitmodules_on_signal() {
+    restore_all_rewritten_gitmodules
+    exit 130
+}
+trap restore_https_gitmodules_on_exit EXIT
+trap restore_https_gitmodules_on_signal INT TERM
 
 if should_use_https_fallback; then
     print_info "使用 HTTPS 拉取 GitHub 子模块（无 ssh / 无密钥 / --https）"
