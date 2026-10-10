@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-# 快速启动脚本（Panthera HT Deploy Workspace）
+# 快速启动脚本（HT Deploy Workspace）
 # - 自动识别当前 workspace 路径（脚本所在目录）
+# - 支持机型切换：panthera_ht / openarm_ht（菜单或 ROBOT_NAME=...）
 # - 拖动模式仅真机可用；仿真启动时不提供拖动模式
-# - 启动选项参考：README.md
+# - 启动选项参考：各 description 包 README.md
 
 set -u
 
@@ -16,20 +17,63 @@ WS_DIR="${SCRIPT_DIR}"
 
 # 启动历史记忆文件（与 teleop_start.sh 共用；条目用 kind 字段区分）
 HIST_FILE="${HOME}/.config/panthera_ht/quick_start_history.json"
+# 当前机型记忆（菜单切换后持久化；环境变量 ROBOT_NAME 优先）
+ROBOT_PREF_FILE="${HOME}/.config/panthera_ht/robot_name"
 # 历史保留条数（最近 N 条不同配置）
 HIST_MAX=2
 
 # OCS2 启动包 / launch 文件 / 机器人名
 OCS2_LAUNCH_PKG="ocs2_arm_controller"
 OCS2_LAUNCH_FILE="demo.launch.py"
-ROBOT_NAME="panthera_ht"
 
-# 拖动模式（低刚度）kp/kd 默认值 —— 关节 kp/kd 为数组（每臂 6 值，
-# dual 时 xacro 自动拼接为 12 值，勿传 12 值）
-DRAG_JOINT_KP=(0.01 0.01 0.01 0.01 0.01 0.01)
-DRAG_JOINT_KD=(0.1 0.1 0.1 0.1 0.1 0.1)
-DRAG_GRIPPER_KP=0.001
-DRAG_GRIPPER_KD=0.01
+# 支持的机型列表（description 包名去掉 _description）
+SUPPORTED_ROBOTS=(panthera_ht openarm_ht)
+
+_load_robot_name() {
+  local pref=""
+  if [ -n "${ROBOT_NAME:-}" ]; then
+    echo "${ROBOT_NAME}"
+    return 0
+  fi
+  if [ -f "${ROBOT_PREF_FILE}" ]; then
+    pref="$(tr -d '[:space:]' < "${ROBOT_PREF_FILE}" 2>/dev/null || true)"
+  fi
+  case "${pref}" in
+    panthera_ht|openarm_ht) echo "${pref}" ;;
+    *)
+      # 默认：若存在 openarm 包则优先 openarm，否则 panthera
+      if [ -d "${WS_DIR}/src/robot-descriptions-ht/openarm_ht_description" ]          || [ -d "${WS_DIR}/install/openarm_ht_description" ]; then
+        echo "openarm_ht"
+      else
+        echo "panthera_ht"
+      fi
+      ;;
+  esac
+}
+
+ROBOT_NAME="$(_load_robot_name)"
+
+save_robot_name() {
+  mkdir -p "$(dirname "${ROBOT_PREF_FILE}")"
+  printf '%s\n' "${ROBOT_NAME}" > "${ROBOT_PREF_FILE}"
+}
+
+# 拖动模式（低刚度）kp/kd —— 按机型 DOF 生成（panthera=6, openarm=7；dual 时 xacro 自动拼接）
+set_drag_gains_for_robot() {
+  case "${ROBOT_NAME}" in
+    openarm_ht)
+      DRAG_JOINT_KP=(0.01 0.01 0.01 0.01 0.01 0.01 0.01)
+      DRAG_JOINT_KD=(0.1 0.1 0.1 0.1 0.1 0.1 0.1)
+      ;;
+    *)
+      DRAG_JOINT_KP=(0.01 0.01 0.01 0.01 0.01 0.01)
+      DRAG_JOINT_KD=(0.1 0.1 0.1 0.1 0.1 0.1)
+      ;;
+  esac
+  DRAG_GRIPPER_KP=0.001
+  DRAG_GRIPPER_KD=0.01
+}
+set_drag_gains_for_robot
 
 # 真机控制模式映射（菜单选项 → xacro_control_mode）
 # 1) mit      — 位置+速度+力矩+kp/kd（kp/kd 可为 0）
@@ -188,13 +232,14 @@ PYEOF
 # 记录一次启动配置 (按 type/hardware/control_mode/drag/usb_select 去重,
 # 保留最近 HIST_MAX 条不同配置；其他 kind 条目原样保留)
 record_launch() {
-  python3 - "${HIST_FILE}" "$1" "$2" "$3" "$4" "$5" "${HIST_MAX}" <<'PYEOF'
+  python3 - "${HIST_FILE}" "$1" "$2" "$3" "$4" "$5" "${ROBOT_NAME}" "${HIST_MAX}" <<'PYEOF'
 import json, os, sys, time
-path, jtype, jhw, jcm, jdrag, jusb, hist_max = sys.argv[1:8]
+path, jtype, jhw, jcm, jdrag, jusb, robot, hist_max = sys.argv[1:9]
 hist_max = int(hist_max)
 drag = (jdrag == "true")
 entry = {
     "kind": "quick_start",
+    "robot": robot,
     "type": jtype,
     "hardware": jhw,
     "control_mode": jcm,
@@ -203,8 +248,9 @@ entry = {
     "ts": int(time.time()),
 }
 type_label = {"single": "单臂", "dual": "双臂", "left": "左臂", "right": "右臂"}.get(jtype, jtype)
-parts = [type_label,
-         "真机" if jhw == "real" else "仿真"]
+robot_label = {"panthera_ht": "Panthera", "openarm_ht": "OpenArm"}.get(robot, robot)
+parts = [robot_label, type_label,
+         {"real": "真机", "isaac": "Isaac", "mock_components": "仿真"}.get(jhw, jhw)]
 if jcm:
     parts.append(jcm)
 if drag:
@@ -221,7 +267,8 @@ except Exception:
     data = []
 
 def same(e):
-    return (e.get("type") == entry["type"] and e.get("hardware") == entry["hardware"]
+    return (e.get("robot", robot) == entry["robot"]
+            and e.get("type") == entry["type"] and e.get("hardware") == entry["hardware"]
             and e.get("control_mode", "") == entry["control_mode"]
             and bool(e.get("drag", False)) == drag
             and e.get("usb_select", "auto") == jusb)
@@ -244,8 +291,9 @@ menu() {
   local n="${1:-0}"
   local last d
   echo -e "${BLUE}========================================${NC}" >&2
-  echo -e "${BLUE}  快速启动（Panthera HT Deploy Workspace）${NC}" >&2
+  echo -e "${BLUE}  快速启动（HT Deploy Workspace）${NC}" >&2
   echo -e "${BLUE}  Workspace: ${WS_DIR}${NC}" >&2
+  echo -e "${BLUE}  Robot: ${ROBOT_NAME}${NC}" >&2
   echo -e "${BLUE}========================================${NC}" >&2
   echo "" >&2
   echo "请选择操作:" >&2
@@ -267,6 +315,51 @@ menu() {
     choice="1"
   fi
   echo "${choice}"
+}
+
+robot_menu() {
+  local default_choice="1"
+  case "${ROBOT_NAME}" in
+    openarm_ht) default_choice="2" ;;
+    *) default_choice="1" ;;
+  esac
+  echo "" >&2
+  echo -e "${BLUE}========================================${NC}" >&2
+  echo -e "${BLUE}  选择机型 (当前: ${ROBOT_NAME})${NC}" >&2
+  echo -e "${BLUE}========================================${NC}" >&2
+  if [ "${default_choice}" = "1" ]; then
+    echo " *1) panthera_ht   — Panthera HT（6-DoF 单臂/双臂）" >&2
+    echo "  2) openarm_ht    — OpenArm HT（7-DoF 双臂底座）" >&2
+  else
+    echo "  1) panthera_ht   — Panthera HT（6-DoF 单臂/双臂）" >&2
+    echo " *2) openarm_ht    — OpenArm HT（7-DoF 双臂底座）" >&2
+  fi
+  echo "  0) 退出" >&2
+  echo "" >&2
+  read -r -p "请输入选项 [0-2]（回车=默认 ${default_choice}）: " choice
+  if [ -z "${choice}" ]; then
+    choice="${default_choice}"
+  fi
+  echo "${choice}"
+}
+
+apply_robot_choice() {
+  local choice="$1"
+  case "${choice}" in
+    1) ROBOT_NAME="panthera_ht" ;;
+    2) ROBOT_NAME="openarm_ht" ;;
+    0)
+      echo "退出"
+      exit 0
+      ;;
+    *)
+      echo -e "${YELLOW}无效选项${NC}"
+      exit 1
+      ;;
+  esac
+  set_drag_gains_for_robot
+  save_robot_name
+  echo -e "${GREEN}机型: ${ROBOT_NAME}${NC}"
 }
 
 build_menu() {
@@ -335,11 +428,12 @@ launch_menu() {
 launch_mode_menu() {
   echo "" >&2
   echo "请选择运行模式:" >&2
-  echo " *1) 仿真" >&2
+  echo " *1) 仿真 (mock_components)" >&2
   echo "  2) 真机" >&2
+  echo "  3) Isaac 仿真 (hardware:=isaac)" >&2
   echo "  0) 返回" >&2
   echo "" >&2
-  read -r -p "请输入选项 [0-2]（回车=默认 1）: " choice
+  read -r -p "请输入选项 [0-3]（回车=默认 1）: " choice
   if [ -z "${choice}" ]; then
     choice="1"
   fi
@@ -429,10 +523,10 @@ ask_drag_mode() {
 
 # 拖动模式: 生成低刚度 kp/kd 的 hardware_ 前缀参数（启动时经 xacro 直接写入
 # URDF <param>，硬件加载即生效；无需启动后再调参数服务器）
-# 每臂 6 值 CSV；dual 时 robot.xacro 自动拼接为 12 值（勿传 12 值，会拼成 24）
+# 每臂 N 值 CSV（panthera=6 / openarm=7）；dual 时 xacro 自动拼接
 # 仅 hardware:=real/real_usb 时 hardware_ 前缀才生效（build_xacro_mappings）
 drag_mode_args() {
-  # 用顶部常量数组拼接 CSV（每臂 6 值；dual 时 xacro 自动拼接为 12 值）
+  # 用当前机型拖动增益数组拼接 CSV
   local kp kd
   kp="$(IFS=', '; echo "${DRAG_JOINT_KP[*]}")"
   kd="$(IFS=', '; echo "${DRAG_JOINT_KD[*]}")"
@@ -442,8 +536,8 @@ drag_mode_args() {
 # 重现一条历史启动配置 (idx: 0=最近, 1=次近)
 run_history_launch() {
   local idx="$1"
-  local jtype jhw jcm jdrag jusb
-  IFS=',' read -r jtype jhw jcm jdrag jusb <<EOF
+  local jtype jhw jcm jdrag jusb jrobot
+  IFS=',' read -r jtype jhw jcm jdrag jusb jrobot <<EOF
 $(python3 - "${HIST_FILE}" "${idx}" <<'PYEOF'
 import json, sys
 path, idx = sys.argv[1], int(sys.argv[2])
@@ -455,7 +549,7 @@ if not isinstance(d, list):
     d = []
 d = [e for e in d if e.get("kind", "quick_start") == "quick_start"]
 if idx >= len(d):
-    print("single,mock_components,,false,auto")
+    print("single,mock_components,,false,auto,panthera_ht")
     sys.exit(0)
 e = d[idx]
 print(",".join([
@@ -464,16 +558,25 @@ print(",".join([
     e.get("control_mode", ""),
     "true" if e.get("drag") else "false",
     e.get("usb_select", "auto"),
+    e.get("robot", "panthera_ht"),
 ]))
 PYEOF
 )
 EOF
+  if [ -n "${jrobot}" ]; then
+    ROBOT_NAME="${jrobot}"
+    set_drag_gains_for_robot
+  fi
   local -a args=()
   args+=("type:=${jtype}")
   if [ "${jhw}" = "real" ]; then
     CONTROL_MODE="${jcm}"
     USB_SELECT="${jusb}"
     args+=("hardware:=real")
+  elif [ "${jhw}" = "isaac" ]; then
+    CONTROL_MODE=""
+    USB_SELECT="auto"
+    args+=("hardware:=isaac")
   else
     CONTROL_MODE=""
     USB_SELECT="auto"
@@ -574,6 +677,8 @@ _run_ocs2_demo() {
       type:=left) jtype="left" ;;
       type:=right) jtype="right" ;;
       hardware:=real) jhw="real" ;;
+      hardware:=isaac) jhw="isaac" ;;
+      hardware:=mock_components) jhw="mock_components" ;;
     esac
   done
   record_launch "${jtype}" "${jhw}" "${jcm}" "${jdrag}" "${jusb}"
@@ -687,6 +792,10 @@ run_colcon_build() {
 
 need_cmd colcon || echo -e "${YELLOW}[WARN] 未找到 colcon，编译选项会失败（通常需要安装 ROS 发行版环境）。${NC}"
 
+# 机型选择放在最前，选定后进入编译/启动流程（一次跑完）
+robot_choice="$(robot_menu)"
+apply_robot_choice "${robot_choice}"
+
 HIST_COUNT="$(history_count)"
 top_choice="$(menu "${HIST_COUNT}")"
 
@@ -738,9 +847,7 @@ if [ "${top_choice}" = "$((HIST_COUNT + 2))" ]; then
     launch_choice="$(launch_menu)"
     case "${launch_choice}" in
       1|2|3|4)
-        # panthera_ht xacro 的 type: dual=双臂 / single=单臂 / left=左臂 /
-        # right=右臂；若不传 type，robot_common_launch 会把 OCS2 planning URDF
-        # 默认成 dual（14 DOF），与单臂 6 关节控制器不匹配。
+        # type: dual/single/left/right（panthera_ht / openarm_ht 均支持）
         case "${launch_choice}" in
           1) arm_label="双臂"; type_arg="type:=dual" ;;
           2) arm_label="单臂"; type_arg="type:=single" ;;
@@ -752,7 +859,7 @@ if [ "${top_choice}" = "$((HIST_COUNT + 2))" ]; then
 
         case "${mode_choice}" in
           1)
-            # 仿真：无拖动模式
+            # 仿真：mock_components，无拖动模式
             _run_ocs2_demo "${arm_label}仿真" "false" "${type_arg}"
             ;;
           2)
@@ -784,6 +891,11 @@ if [ "${top_choice}" = "$((HIST_COUNT + 2))" ]; then
                 _run_ocs2_demo "${arm_label}真机" "${drag_flag}" "${type_arg}" "hardware:=real"
               fi
             fi
+            ;;
+          3)
+            # Isaac：TopicBasedSystem ↔ /isaac/joint_*，无拖动模式
+            echo -e "${BLUE}[INFO] Isaac：请先在 Isaac Sim Play，并确认 /isaac/joint_states 有数据${NC}"
+            _run_ocs2_demo "${arm_label}Isaac" "false" "${type_arg}" "hardware:=isaac"
             ;;
           0)
             echo "返回"
