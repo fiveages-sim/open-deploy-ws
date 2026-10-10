@@ -70,6 +70,18 @@ is_pkg_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
 }
 
+# 收集 src 下某目录的全部 colcon 包名（存在 package.xml 才算；每行一个）
+# 模块切成 deb 时子模块目录被清空（只剩空目录），此时收集结果为空，
+# 因此「有没有源码」应以本函数结果为准，而不是看 deb 是否安装。
+# $1 = src 下的目录名；$2 = 工作空间根目录（默认取脚本所在目录的上级 src）
+collect_pkgs() {
+  local dir="${2:-$PWD}/src/$1"
+  [ -d "${dir}" ] || return 0
+  find "${dir}" -name package.xml -not -path '*/.git/*' 2>/dev/null | while read -r f; do
+    sed -n 's/.*<name>\([^<]*\)<\/name>.*/\1/p' "${f}" | head -1
+  done
+}
+
 pkg_version() {
   dpkg-query -W -f='${Version}' "$1" 2>/dev/null || true
 }

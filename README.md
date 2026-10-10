@@ -60,7 +60,7 @@ cd ~/ht-deploy-ws
 | 选项 | 说明 |
 |------|------|
 | `1) 上次启动` / `2) 另一次启动` | 直接重现最近一次/前一次的启动配置（含臂组合、仿真/真机、控制模式、拖动模式、USB 口） |
-| `编译 (Build)` | 按场景编译：`1) 仿真所需包` / `2) 真机所需包`（真机包含 `ht_ros2_control` 驱动；arms-full deb 已提供时自动跳过） |
+| `编译 (Build)` | 按场景编译：`1) 仿真所需包` / `2) 真机所需包`（真机额外包含 `ht_ros2_control` 驱动）。**以 `src/` 下是否真有源码为准**：有源码就编源码（deb 与源码并存时源码 overlay 生效），`src/` 为空（模块由 deb 提供）才跳过 |
 | `启动 (Launch)` | 进入启动流程（见下） |
 
 **启动流程**（`启动 (Launch)`）：
@@ -329,10 +329,19 @@ chmod +x ./quick_start.sh
 
 - 在菜单中选择 **`1) 编译 (Build)`**
   - **`1) 编译仿真所需包`**：用于仿真/开发（不依赖真机驱动）
-  - **`2) 编译真机所需包`**：用于连接真机（`arms-full` deb 已含 `ht_ros2_control` 时通常只需编描述包）
+  - **`2) 编译真机所需包`**：用于连接真机（额外包含 `ht_ros2_control` 驱动）
+
+> **编译范围是自动探测的**：脚本扫描 `src/` 下各模块目录里真实存在的 `package.xml`，
+> 把命中的包全部编译（`colcon build --packages-up-to`）。因此
+> - 模块被切成 **source**（`src/` 下有源码）→ 编译源码，即使对应 deb 仍装着；
+> - 模块被切成 **deb**（`src/` 下目录已清空）→ 自动跳过，用 deb 提供的包。
+>
+> 菜单进入时会提示当前探测到的模式；若 deb 与源码并存会额外告警。
 
 <details>
 <summary><strong>（可选）手动编译命令</strong></summary>
+
+等价于脚本自动探测出的包集合；脚本实际执行的就是下面这类命令（包名随 `src/` 内容变化）：
 
 ```bash
 cd ~/ht-deploy-ws
@@ -348,7 +357,7 @@ colcon build --packages-up-to \
 
 ```bash
 cd ~/ht-deploy-ws
-# 真机所需包（ht_ros2_control 若已由 arms-full deb 提供则可省略）
+# 真机所需包（多一个 ht_ros2_control 硬件驱动）
 colcon build --packages-up-to \
   ht_ros2_control \
   ocs2_arm_controller \

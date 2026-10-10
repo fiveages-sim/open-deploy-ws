@@ -565,12 +565,9 @@ build_menu() {
 }
 
 # 收集目录下全部 colcon 包名（存在 package.xml 才算；每行一个）
-collect_pkgs() {
-  local dir="$1"
-  [ -d "${dir}" ] || return 0
-  find "${dir}" -name package.xml 2>/dev/null | while read -r f; do
-    sed -n 's/.*<name>\([^<]*\)<\/name>.*/\1/p' "${f}" | head -1
-  done
+# 实现见 scripts/lib_common.sh 的 collect_pkgs（按 src 下目录名收集）
+collect_pkgs_dir() {
+  collect_pkgs "$1" "${WS_DIR}"
 }
 
 # 编译目标包：$1 = real | sim
@@ -581,18 +578,18 @@ do_build() {
 
   # 基础包（源码目录名，colcon 按 --paths 不支持 select，这里转成包名）
   for d in "${BUILD_PKGS_BASE[@]}"; do
-    mapfile -t arr < <(collect_pkgs "${WS_DIR}/src/${d}")
+    mapfile -t arr < <(collect_pkgs_dir "${d}")
     pkgs+=("${arr[@]}")
   done
   # 可选目录（存在才编译）
   for d in "${BUILD_DIRS_OPTIONAL[@]}"; do
-    mapfile -t arr < <(collect_pkgs "${WS_DIR}/src/${d}")
+    mapfile -t arr < <(collect_pkgs_dir "${d}")
     pkgs+=("${arr[@]}")
   done
   # 真机专属驱动
   if [ "${target}" = "real" ]; then
     for d in "${BUILD_DIR_REAL_ONLY[@]}"; do
-      mapfile -t arr < <(collect_pkgs "${WS_DIR}/src/${d}")
+      mapfile -t arr < <(collect_pkgs_dir "${d}")
       pkgs+=("${arr[@]}")
     done
   fi

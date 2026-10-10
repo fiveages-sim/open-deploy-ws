@@ -196,10 +196,19 @@ chmod +x ./quick_start.sh
 
 - In the menu, select **`1) Build`**
   - **`1) Build simulation packages`**: for simulation / development (no real-hardware drivers)
-  - **`2) Build real-hardware packages`**: for connecting to real hardware (when the `arms-full` deb already includes `ht_ros2_control`, you typically only need to build description packages)
+  - **`2) Build real-hardware packages`**: for connecting to real hardware (adds the `ht_ros2_control` driver)
+
+> **The build scope is auto-detected**: the script scans `src/` for real `package.xml`
+> files and builds every package it finds (`colcon build --packages-up-to`). So
+> - a module set to **source** (code present under `src/`) is built from source, even if the matching deb is still installed;
+> - a module set to **deb** (its `src/` directory was emptied) is skipped and the deb-provided package is used.
+>
+> The menu prints the detected mode on entry, and warns when deb and source coexist.
 
 <details>
 <summary><strong>(Optional) Manual build commands</strong></summary>
+
+Equivalent to the package set the script auto-detects; the script effectively runs a command like the following (package names vary with `src/` contents):
 
 ```bash
 cd ~/ht-deploy-ws
@@ -215,7 +224,7 @@ colcon build --packages-up-to \
 
 ```bash
 cd ~/ht-deploy-ws
-# Real-hardware packages (omit ht_ros2_control if already provided by the arms-full deb)
+# Real-hardware packages (one extra hardware driver: ht_ros2_control)
 colcon build --packages-up-to \
   ht_ros2_control \
   ocs2_arm_controller \

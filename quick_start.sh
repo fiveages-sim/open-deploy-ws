@@ -41,21 +41,61 @@ declare -A CONTROL_MODES=(
   [3]="position"
 )
 
-# ===================== 核心包由 deb 提供时，src 下无 arms_ros2_control / ocs2_ros2 等 =====================
-# HT 工作空间默认 arms-full（含 ht_ros2_control）
-core_deb_mode() {
-  if dpkg-query -W -f='${Status}' ros-jazzy-arms-ros2-control-full 2>/dev/null | grep -q "install ok installed"; then
-    return 0
-  fi
-  if dpkg-query -W -f='${Status}' ros-jazzy-arms-ros2-control 2>/dev/null | grep -q "install ok installed"; then
-    return 0
-  fi
-  [ ! -d "${WS_DIR}/src/arms_ros2_control" ] && [ ! -d "${WS_DIR}/src/ocs2_ros2" ]
+# ===================== 安装模式判定：src 下有源码就编源码（源码优先） =====================
+# 判定依据是「src 下是否真的存在包」，而不是「deb 是否装上了」：
+#   - init_repo.sh 把模块切成 source 后，deb 可能仍残留安装着；
+#     此时若只看 deb 就会误判成 deb 模式，导致源码 packages 一个都不编。
+#   - 反过来，切成 deb 时子模块目录会被清空（只剩空目录），没有 package.xml，
+#     此时才应判定为 deb 模式，只编 HT 描述包。
+# 两者并存（mixed）时按源码编译：workspace overlay 会遮住同名 deb 包。
+
+# 核心 deb 包名（arms 有 full / standard 两个变体，都算 arms deb）
+ARMS_DEB_FULL="ros-jazzy-arms-ros2-control-full"
+ARMS_DEB_STD="ros-jazzy-arms-ros2-control"
+
+# 编译目标源码目录：仿真 / 真机共用（目录不存在或无 package.xml 自动跳过）
+BUILD_SRC_DIRS_BASE=(arms_ros2_control ocs2_ros2 robot-descriptions-common robot-descriptions-ht)
+# 真机额外需要的硬件驱动源码目录
+BUILD_SRC_DIRS_REAL=(ht-ros2-control)
+
+# 源码目录是否真的含包（deb 模式下子模块目录被清空，只剩空目录）
+src_dir_has_pkgs() {
+  [ -n "$(collect_pkgs "$1" "${WS_DIR}")" ]
 }
 
-# arms-full 已提供 ht_ros2_control，真机编译无需再编该包
+# 收集待编译包名（去重）：$1 = sim | real
+collect_build_pkgs() {
+  local target="$1" d
+  local -a dirs=("${BUILD_SRC_DIRS_BASE[@]}")
+  [ "${target}" = "real" ] && dirs+=("${BUILD_SRC_DIRS_REAL[@]}")
+  for d in "${dirs[@]}"; do
+    collect_pkgs "${d}" "${WS_DIR}"
+  done | sort -u
+}
+
+# 核心包（arms / ocs2 / robot-descriptions-common）是否有源码
+core_src_mode() {
+  src_dir_has_pkgs arms_ros2_control ||
+    src_dir_has_pkgs ocs2_ros2 ||
+    src_dir_has_pkgs robot-descriptions-common
+}
+
+# 核心包是否完全由 deb 提供（src 下确无源码时才算）
+core_deb_mode() {
+  core_src_mode && return 1
+  return 0
+}
+
+# arms deb 是否已安装（full / standard 均算）
+arms_deb_installed() {
+  is_pkg_installed "${ARMS_DEB_FULL}" || is_pkg_installed "${ARMS_DEB_STD}"
+}
+
+# ht_ros2_control 是否由 arms-full deb 提供：src 下无源码、且 deb 已装
+# src 下有 ht-ros2-control 源码时一律按源码编译（overlay 优先于 deb）
 ht_from_deb() {
-  dpkg-query -W -f='${Status}' ros-jazzy-arms-ros2-control-full 2>/dev/null | grep -q "install ok installed"
+  src_dir_has_pkgs ht-ros2-control && return 1
+  is_pkg_installed "${ARMS_DEB_FULL}"
 }
 
 source_ros_underlay() {
@@ -232,12 +272,47 @@ menu() {
 build_menu() {
   echo "" >&2
   echo "请选择编译目标:" >&2
+  if core_src_mode; then
+    echo -e "  ${GREEN}[检测到 src 下有源码，将编译源码包]${NC}" >&2
+  else
+    echo -e "  ${YELLOW}[src 下无核心包源码（deb 提供），只编译 workspace 内的包]${NC}" >&2
+  fi
+  if arms_deb_installed && core_src_mode; then
+    echo -e "  ${YELLOW}[警告] arms deb 与源码并存，源码 overlay 会遮住 deb${NC}" >&2
+  fi
   echo "  1) 编译仿真所需包" >&2
   echo "  2) 编译真机所需包" >&2
   echo "  0) 返回" >&2
   echo "" >&2
-  read -r -p "请输入选项 [0-2]: " choice
+  read -r -p "请输入选项 [0-2]（回车=默认 1）: " choice
+  if [ -z "${choice}" ]; then
+    choice="1"
+  fi
   echo "${choice}"
+}
+
+# 编译：$1 = sim | real
+# 只编 src 下真实存在的包（deb 提供的模块目录为空，自动跳过），
+# 用 --packages-up-to 顺带把工作空间内的依赖一并编出来。
+do_build() {
+  local target="$1"
+  local -a pkgs=()
+
+  mapfile -t pkgs < <(collect_build_pkgs "${target}")
+
+  if [ "${#pkgs[@]}" -eq 0 ]; then
+    echo -e "${RED}[ERROR] 未在 ${WS_DIR}/src 下找到任何可编译的包${NC}"
+    return 1
+  fi
+
+  if core_src_mode; then
+    echo -e "${BLUE}  模式: 源码编译（src 下有包）${NC}"
+  else
+    echo -e "${BLUE}  模式: 核心包由 deb 提供，仅编译 workspace 内包${NC}"
+  fi
+  echo -e "${BLUE}  编译包 (${#pkgs[@]}): ${pkgs[*]}${NC}"
+
+  run_colcon_build --packages-up-to "${pkgs[@]}" --symlink-install
 }
 
 launch_menu() {
@@ -631,62 +706,23 @@ fi
 if [ "${top_choice}" = "$((HIST_COUNT + 1))" ]; then
     build_choice="$(build_menu)"
     case "${build_choice}" in
-      1)
-    echo -e "${GREEN}开始编译仿真所需包...${NC}"
-    if core_deb_mode; then
-      echo -e "${BLUE}  模式: 核心包 deb + 仅编译 HT 描述包${NC}"
-      if ! run_colcon_build --packages-select panthera_ht_description --symlink-install; then
-        echo -e "${YELLOW}编译过程中出现错误${NC}"
-        exit 1
-      fi
-    else
-      if ! run_colcon_build --packages-up-to \
-        ocs2_arm_controller \
-        panthera_ht_description \
-        arms_teleop \
-        adaptive_gripper_controller \
-        basic_joint_controller \
-        --symlink-install; then
-        echo -e "${YELLOW}编译过程中出现错误${NC}"
-        exit 1
-      fi
-    fi
-    echo -e "${GREEN}编译完成！${NC}"
-    source_workspace_env || echo -e "${YELLOW}[WARN] workspace overlay 未加载，请检查 install/setup.bash${NC}"
-    ;;
-
-      2)
-    echo -e "${GREEN}开始编译真机所需包...${NC}"
-    if core_deb_mode; then
-      if ht_from_deb; then
-        echo -e "${BLUE}  模式: 核心包 deb(arms-full 含 ht_ros2_control) + 仅编译 HT 描述包${NC}"
-        if ! run_colcon_build --packages-select panthera_ht_description --symlink-install; then
-          echo -e "${YELLOW}编译过程中出现错误${NC}"
-          exit 1
+      1|2)
+        if [ "${build_choice}" = "1" ]; then
+          echo -e "${GREEN}开始编译仿真所需包...${NC}"
+          if ! do_build sim; then
+            echo -e "${YELLOW}编译过程中出现错误${NC}"
+            exit 1
+          fi
+        else
+          echo -e "${GREEN}开始编译真机所需包...${NC}"
+          if ! do_build real; then
+            echo -e "${YELLOW}编译过程中出现错误${NC}"
+            exit 1
+          fi
         fi
-      else
-        echo -e "${BLUE}  模式: 核心包 deb + 编译 HT 描述与真机驱动${NC}"
-        if ! run_colcon_build --packages-select panthera_ht_description ht_ros2_control --symlink-install; then
-          echo -e "${YELLOW}编译过程中出现错误${NC}"
-          exit 1
-        fi
-      fi
-    else
-      if ! run_colcon_build --packages-up-to \
-        ht_ros2_control \
-        ocs2_arm_controller \
-        panthera_ht_description \
-        arms_teleop \
-        adaptive_gripper_controller \
-        basic_joint_controller \
-        --symlink-install; then
-        echo -e "${YELLOW}编译过程中出现错误${NC}"
-        exit 1
-      fi
-    fi
-    echo -e "${GREEN}编译完成！${NC}"
-    source_workspace_env || echo -e "${YELLOW}[WARN] workspace overlay 未加载，请检查 install/setup.bash${NC}"
-    ;;
+        echo -e "${GREEN}编译完成！${NC}"
+        source_workspace_env || echo -e "${YELLOW}[WARN] workspace overlay 未加载，请检查 install/setup.bash${NC}"
+        ;;
       0)
         echo "返回"
         ;;
