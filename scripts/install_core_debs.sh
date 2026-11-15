@@ -43,9 +43,10 @@ usage() {
   --only <list>  仅安装指定包，逗号分隔。可用短名：ocs2, common, arms
                  示例: --only ocs2  或  --only ocs2,arms
                  未指定时安装配置文件中的全部包。
+                 若指定 arms 且缺少本地依赖 common/ocs2，会自动补齐。
 
 配置中 tag 留空或填 latest 时，自动从 GitHub 获取最新 release。
-安装使用 apt-get install，自动处理依赖。
+安装使用 apt-get install；核心包之间的依赖由本地 deb 满足（不在 apt 源中）。
 EOF
 }
 
@@ -83,6 +84,46 @@ should_install_prefix() {
   return 1
 }
 
+# 核心 deb 依赖（arms 硬依赖 common + ocs2，且二者不在 apt 源中）
+core_deb_required_prefixes() {
+  case "$1" in
+    ros-jazzy-arms-ros2-control)
+      printf '%s\n' "ros-jazzy-robot-descriptions-common" "ros-jazzy-ocs2"
+      ;;
+  esac
+}
+
+only_filter_contains() {
+  local prefix="$1" f
+  for f in "${ONLY_FILTER[@]}"; do
+    [[ "$f" == "$prefix" ]] && return 0
+  done
+  return 1
+}
+
+# --only 自动补齐未安装的本地依赖，避免 apt「held broken packages」
+expand_only_filter_with_deps() {
+  local i=0 prefix dep
+  [[ ${#ONLY_FILTER[@]} -eq 0 ]] && return 0
+
+  while [[ "$i" -lt ${#ONLY_FILTER[@]} ]]; do
+    prefix="${ONLY_FILTER[$i]}"
+    while IFS= read -r dep; do
+      [[ -z "$dep" ]] && continue
+      if only_filter_contains "$dep"; then
+        continue
+      fi
+      if is_pkg_installed "$dep"; then
+        print_info "依赖 ${dep} 已安装，跳过自动补齐"
+        continue
+      fi
+      print_warn "安装 ${prefix} 需要本地 deb 依赖 ${dep}（不在 apt 源中），已自动加入安装列表"
+      ONLY_FILTER+=("$dep")
+    done < <(core_deb_required_prefixes "$prefix")
+    i=$((i + 1))
+  done
+}
+
 if [[ -z "$DEB_ARCH" ]]; then
   print_error "无法检测 dpkg 架构，请确认在 Debian/Ubuntu 环境中运行。"
   exit 1
@@ -108,44 +149,6 @@ apt_run() {
 
 is_pkg_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
-}
-
-# 与 ros-jazzy-robot-descriptions-common 文件路径冲突的旧版独立 deb
-COMMON_CONFLICT_PACKAGES=(
-  "ros-${ROS_DISTRO}-robotiq-description"
-)
-
-prepare_common_deb_install() {
-  local pkg conflict_choice
-  local -a installed_conflicts=()
-
-  for pkg in "${COMMON_CONFLICT_PACKAGES[@]}"; do
-    is_pkg_installed "$pkg" && installed_conflicts+=("$pkg")
-  done
-
-  [[ ${#installed_conflicts[@]} -eq 0 ]] && return 0
-
-  print_warn "安装 ros-jazzy-robot-descriptions-common 前需先卸载以下冲突包（安装路径重叠）："
-  for pkg in "${installed_conflicts[@]}"; do
-    print_warn "  - ${pkg}"
-  done
-  print_warn "common deb 已包含 robotiq 等公共描述，保留旧包会导致 apt 安装失败。"
-  read -rp "是否自动卸载上述包？[Y/n]: " conflict_choice
-  case "$conflict_choice" in
-    n|N|no|NO)
-      print_error "已取消安装。请手动执行: sudo apt-get remove ${installed_conflicts[*]}"
-      exit 1
-      ;;
-  esac
-
-  for pkg in "${installed_conflicts[@]}"; do
-    print_info "卸载冲突包: ${pkg} ..."
-    apt_run remove -y "$pkg" || {
-      print_error "卸载 ${pkg} 失败，请手动删除后重试"
-      exit 1
-    }
-  done
-  echo "" >&2
 }
 
 # 按前缀匹配 release 中的 deb 资产（兼容新旧命名）
@@ -409,14 +412,63 @@ download_deb_for_package() {
   return 1
 }
 
-install_deb() {
-  local deb_file="$1"
-  print_info "安装 ${deb_file} ..."
-  if apt_run install -y "$deb_file"; then
+diagnose_install_failure() {
+  local deb_file="$1" log_file="$2"
+  local pkg missing_deps=() line dep
+
+  pkg="$(dpkg-deb -f "$deb_file" Package 2>/dev/null || true)"
+  [[ -z "$pkg" ]] && pkg="$(basename "$deb_file")"
+
+  if grep -qE 'held broken packages|unmet dependencies|is not installable|Depends:' "$log_file"; then
+    print_error "apt 依赖无法满足（通常不是 deb 缓存损坏）"
+    while IFS= read -r line; do
+      print_error "  ${line}"
+    done < <(grep -E 'Depends:|but it is not|held broken|unmet dependencies|packages have unmet' "$log_file" | sed 's/^[[:space:]]*//' | uniq)
+
+    if [[ -n "$pkg" ]]; then
+      while IFS= read -r dep; do
+        [[ -z "$dep" ]] && continue
+        is_pkg_installed "$dep" || missing_deps+=("$dep")
+      done < <(core_deb_required_prefixes "$pkg")
+    fi
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+      print_error "缺少需从 GitHub Release 安装的本地依赖: ${missing_deps[*]}"
+      print_info "请重新运行安装（脚本会自动补齐），或手动: scripts/install_core_debs.sh --only ocs2,common,arms"
+    fi
     return 0
   fi
-  print_warn "安装失败，删除可能损坏的缓存以便下次重新下载: ${deb_file}"
-  rm -f "$deb_file" "${deb_file}.part"
+  return 1
+}
+
+install_deb() {
+  local deb_file="$1"
+  local log_file rc=0
+
+  print_info "安装 ${deb_file} ..."
+  log_file="$(mktemp)"
+  # apt 进度仍输出到终端；同时保留日志用于诊断
+  apt_run install -y "$deb_file" 2>&1 | tee "$log_file"
+  rc=${PIPESTATUS[0]}
+
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$log_file"
+    return 0
+  fi
+
+  if diagnose_install_failure "$deb_file" "$log_file"; then
+    print_warn "保留 deb 缓存以便修复依赖后重试: ${deb_file}"
+    rm -f "$log_file"
+    return 1
+  fi
+
+  if ! is_valid_deb_file "$deb_file"; then
+    print_warn "安装失败且 deb 校验失败，删除可能损坏的缓存: ${deb_file}"
+    rm -f "$deb_file" "${deb_file}.part"
+  else
+    print_error "安装失败（已保留有效缓存）: ${deb_file}"
+    print_error "请检查上方 apt 输出；若为权限/锁问题，关闭其他 apt 进程后重试"
+  fi
+  rm -f "$log_file"
   return 1
 }
 
@@ -437,6 +489,7 @@ fi
 print_info "安装核心 deb 包（ROS ${ROS_DISTRO}，架构 ${DEB_ARCH}）"
 print_info "安装顺序: ocs2 → common → arms_ros2_control"
 print_info "配置文件: $DEB_CONF"
+expand_only_filter_with_deps
 if [[ ${#ONLY_FILTER[@]} -gt 0 ]]; then
   print_info "仅安装: ${ONLY_FILTER[*]}"
 fi
@@ -468,9 +521,6 @@ for spec in "${DEB_SPECS[@]}"; do
   step=$((step + 1))
   print_info "[${step}/${total_to_install}] 处理 ${prefix} ..."
   deb_path="$(download_deb_for_package "$prefix" "$tag" "$primary_repo")" || exit 1
-  if [[ "$prefix" == "ros-jazzy-robot-descriptions-common" ]]; then
-    prepare_common_deb_install
-  fi
   install_deb "$deb_path" || {
     print_error "安装 ${prefix} 失败"
     exit 1

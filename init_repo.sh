@@ -945,6 +945,28 @@ if [ "$FLOW" = "switch" ]; then
         done
     fi
 
+    # arms deb 硬依赖 ocs2/common 本地包；在「无变化提前退出」前纠偏
+    if [ "$USE_DEB_ARMS" -eq 1 ]; then
+        if [ "$USE_DEB_OCS2" -eq 0 ] || ! is_pkg_installed "$(module_short_to_deb ocs2)"; then
+            if [ "$USE_DEB_OCS2" -eq 0 ]; then
+                print_warn "arms=deb 依赖 ros-jazzy-ocs2，已自动将 ocs2 改为 deb"
+                USE_DEB_OCS2=1
+            fi
+            if ! is_pkg_installed "$(module_short_to_deb ocs2)"; then
+                CHANGED_OCS2=1
+            fi
+        fi
+        if [ "$USE_DEB_COMMON" -eq 0 ] || ! is_pkg_installed "$(module_short_to_deb common)"; then
+            if [ "$USE_DEB_COMMON" -eq 0 ]; then
+                print_warn "arms=deb 依赖 ros-jazzy-robot-descriptions-common，已自动将 common 改为 deb"
+                USE_DEB_COMMON=1
+            fi
+            if ! is_pkg_installed "$(module_short_to_deb common)"; then
+                CHANGED_COMMON=1
+            fi
+        fi
+    fi
+
     if [ "$CHANGED_OCS2" -eq 0 ] && [ "$CHANGED_ARMS" -eq 0 ] && [ "$CHANGED_COMMON" -eq 0 ]; then
         print_info "没有模块需要切换安装方式，仅保存可见性设置后退出。"
         save_module_mode_state
@@ -966,9 +988,16 @@ if [ "$FLOW" = "init" ]; then
     CHANGED_COMMON=1
 fi
 
-# 依赖提示
-if [ "$USE_DEB_ARMS" -eq 1 ] && [ "$USE_DEB_OCS2" -eq 0 ]; then
-    print_warn "arms 选择 deb 而 ocs2 选择 source：arms deb 通常依赖 ocs2 包，安装可能失败。"
+# init：arms=deb 时强制补齐 ocs2/common deb，避免 apt held broken packages
+if [ "$FLOW" = "init" ] && [ "$USE_DEB_ARMS" -eq 1 ]; then
+    if [ "$USE_DEB_OCS2" -eq 0 ]; then
+        print_warn "arms=deb 依赖 ros-jazzy-ocs2，已自动将 ocs2 改为 deb"
+        USE_DEB_OCS2=1
+    fi
+    if [ "$USE_DEB_COMMON" -eq 0 ]; then
+        print_warn "arms=deb 依赖 ros-jazzy-robot-descriptions-common，已自动将 common 改为 deb"
+        USE_DEB_COMMON=1
+    fi
 fi
 
 print_info "初始化模式（嵌套）: $INIT_MODE"
@@ -1474,7 +1503,7 @@ if [ ${#deb_only_parts[@]} -gt 0 ]; then
 fi
 if [ -n "$deb_only_list" ]; then
     print_info ""
-    run_install_core_debs "$deb_only_list" || print_error "deb 安装失败，请检查 deb_versions.conf 或网络连接"
+    run_install_core_debs "$deb_only_list" || print_error "deb 安装失败，请检查依赖（arms 需要 common+ocs2 deb）、deb_versions.conf 或网络连接"
 fi
 
 save_module_mode_state
