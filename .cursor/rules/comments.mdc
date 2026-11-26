@@ -1,0 +1,25 @@
+---
+description: 不保留复述代码或对照其他实现的注释
+alwaysApply: true
+---
+
+# 注释
+
+代码已经写明的动作不要再写注释。不要写「参考 / 对齐 / 与某某实现相同」这类说明。
+
+```cpp
+// ❌ 复述下一行
+// Create end effector pose publisher
+left_end_effector_pose_publisher_ = node_->create_publisher<...>("left_current_pose", 1);
+
+// ❌ 用别的实现当依据
+// Relative name follows the controller namespace, same as trajectory_markers.
+robot_description_publisher_ = node_->create_publisher<...>("ocs2_robot_description", ...);
+
+// ✅ 调用本身已经说明在创建哪个 publisher
+left_end_effector_pose_publisher_ = node_->create_publisher<...>("left_current_pose", 1);
+```
+
+只在代码看不出约束时留注释，例如单位、不变量、协议要求。注释写这条约束本身，不要指向另一处实现。
+
+README 里已经写过的机制不要在注释里再解释。话题语义、参数优先级、状态切换以 README 为准。
