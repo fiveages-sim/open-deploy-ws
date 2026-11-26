@@ -67,10 +67,10 @@ For containers or CI (no TTY to press Enter), use the non-interactive flags. Def
 
 Two selection steps:
 
-1. **Nested visibility** (affects only nested submodules inside each repository; the three top-level repositories are always initialized when source is selected)
-   - **public**: public nested submodules only — suitable for external users
-   - **private**: includes private nested submodules — requires internal repository access
-2. **Core module install mode** (per module: `d` = deb / `s` = source; press Enter to accept the default)
+1. **Core module install mode** (fullscreen: Space toggles deb/source, `d`/`s` to set, Enter confirms; `arms=deb` forces ocs2/common to deb)
+2. **Nested submodule picker** (nested only; when `arms` / `ocs2` / `common` is deb, that parent's nested modules are omitted from the list)
+   - Interactive: ↑/↓ move, Space toggle, `a` select all, `n` reset default, Enter confirm (public by default; excludes hardwares / plane_segmentation / FiveAges Gen1, etc.)
+   - Non-interactive: `--public` / `--private` presets
 
 | Module | Path | Deb package | Default |
 |--------|------|-------------|---------|
@@ -82,7 +82,7 @@ Recommended production combination (script default): **ocs2=deb, arms/common=sou
 
 **2) Switch module install mode**
 
-Detects the current dpkg / source-tree state, switches each module between source ↔ deb (cleans conflicting source trees or uninstalls the corresponding deb), then resynchronizes to the target mode.
+Detects the current dpkg / source-tree state, switches each module between source ↔ deb (cleans conflicting source trees or uninstalls the corresponding deb), then resynchronizes to the target mode. Does **not** open the nested-submodule picker; when switching back to source, nested modules follow the last saved visibility preset (or `--public` / `--private`).
 
 **3) Install / update core debs only**
 
@@ -113,6 +113,7 @@ Run `./init_repo.sh --help` for the full list. Common options:
 | Flag | Environment variable | Meaning |
 |------|----------------------|---------|
 | `--public` / `--private` | `OPEN_DEPLOY_VISIBILITY` | Nested visibility |
+| `--lang=zh\|en` | `OPEN_DEPLOY_LANG` | UI language (also menu option 6; saved in `.core_module_mode`) |
 | `--ocs2=deb\|source` | `OPEN_DEPLOY_OCS2` | ocs2 install mode |
 | `--arms=deb\|source` | `OPEN_DEPLOY_ARMS` | arms install mode |
 | `--common=deb\|source` | `OPEN_DEPLOY_COMMON` | common install mode |

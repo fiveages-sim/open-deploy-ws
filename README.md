@@ -67,10 +67,10 @@ cd ros2_ws
 
 分两步选择：
 
-1. **嵌套可见性**（只影响各仓库内部的嵌套子模块；顶层三个仓在选 source 时都会初始化）
-   - **public**：仅公开嵌套，适用于外部用户
-   - **private**：含私有嵌套，需要内部仓库权限
-2. **核心模块安装方式**（逐项 `d`=deb / `s`=source，回车用默认）
+1. **核心模块安装方式**（全屏：空格切换 deb/source，`d`/`s` 指定，Enter 确认；`arms=deb` 会强制 ocs2/common 为 deb）
+2. **嵌套子模块勾选**（只影响各仓库内部嵌套；`arms`/`ocs2`/`common` 为 deb 时，对应嵌套不会出现在列表中）
+   - 交互：↑/↓ 移动，空格勾选，`a` 全选，`n` 恢复默认，Enter 确认（默认勾选 public，不含 hardwares / plane_segmentation / FiveAges Gen1 等）
+   - 非交互：`--public` / `--private` 作为预设
 
 | 模块 | 路径 | deb 包 | 默认 |
 |------|------|--------|------|
@@ -82,7 +82,7 @@ cd ros2_ws
 
 **2) 切换模块安装方式**
 
-探测当前 dpkg / 源码目录状态，按模块在 source ↔ deb 之间切换（会清理冲突源码或卸载对应 deb），然后按目标重新同步。
+探测当前 dpkg / 源码目录状态，按模块在 source ↔ deb 之间切换（会清理冲突源码或卸载对应 deb），然后按目标重新同步。**不会**再进入嵌套子模块勾选；若切回 source，按上次保存的可见性预设（或 `--public` / `--private`）初始化嵌套。
 
 **3) 仅安装/更新核心 deb**
 
@@ -113,6 +113,7 @@ deb 版本与仓库见 [`deb_versions.conf`](deb_versions.conf)；嵌套 public/
 | 参数 | 环境变量 | 含义 |
 |------|----------|------|
 | `--public` / `--private` | `OPEN_DEPLOY_VISIBILITY` | 嵌套可见性 |
+| `--lang=zh\|en` | `OPEN_DEPLOY_LANG` | 界面语言（菜单选项 6 也可切换，写入 `.core_module_mode`） |
 | `--ocs2=deb\|source` | `OPEN_DEPLOY_OCS2` | ocs2 安装方式 |
 | `--arms=deb\|source` | `OPEN_DEPLOY_ARMS` | arms 安装方式 |
 | `--common=deb\|source` | `OPEN_DEPLOY_COMMON` | common 安装方式 |

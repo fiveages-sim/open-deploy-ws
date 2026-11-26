@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 第五纪双臂轮式人形机器人W1 ROS2部署工作空间初始化脚本
-# 功能：按嵌套可见性 + 逐模块 source/deb 选择初始化子模块，并支持源码↔deb 切换
+# 功能：勾选嵌套子模块 + 逐模块 source/deb 选择初始化，并支持源码↔deb 切换
 
 # 不设置 set -e，允许某些命令失败后继续执行
 set -u  # 遇到未定义变量时退出
@@ -38,13 +38,941 @@ FLOW="init"  # init | deb_only | deb_uninstall | switch | rosdep
 NONINTERACTIVE=0
 FORCE_HTTPS=0
 ASSUME_YES=0
+UI_LANG="zh"  # zh | en
 CLI_FLOW=""
 CLI_VIS=""
 CLI_OCS2=""
 CLI_ARMS=""
 CLI_COMMON=""
 CLI_ONLY=""
+CLI_LANG=""
 REWRITTEN_GITMODULES_REPOS=()
+
+# 交互文案（zh / en）；日志类 print_* 仍以中文为主
+msg() {
+    case "$UI_LANG:$1" in
+        zh:menu_title) echo "请选择操作：" ;;
+        en:menu_title) echo "Select an action:" ;;
+        zh:menu_1) echo "  1) 初始化工作空间（勾选嵌套子模块 + 逐模块 source/deb）" ;;
+        en:menu_1) echo "  1) Initialize workspace (pick nested submodules + per-module source/deb)" ;;
+        zh:menu_1_hint) echo "     默认推荐: ocs2=deb，arms=source，common=source" ;;
+        en:menu_1_hint) echo "     Recommended default: ocs2=deb, arms=source, common=source" ;;
+        zh:menu_2) echo "  2) 切换模块安装方式（源码 ↔ deb）" ;;
+        en:menu_2) echo "  2) Switch module install mode (source ↔ deb)" ;;
+        zh:menu_3) echo "  3) 仅安装/更新核心 deb 包（跳过 Git 子模块拉取）" ;;
+        en:menu_3) echo "  3) Install/update core debs only (skip Git submodule fetch)" ;;
+        zh:menu_4) echo "  4) 卸载核心 deb 包" ;;
+        en:menu_4) echo "  4) Uninstall core debs" ;;
+        zh:menu_5) echo "  5) 仅运行 rosdep 安装依赖（rosdep install --from-paths src --ignore-src -r -y）" ;;
+        en:menu_5) echo "  5) Run rosdep only (rosdep install --from-paths src --ignore-src -r -y)" ;;
+        zh:menu_6) echo "  6) 切换语言 / Switch language（当前: 中文）" ;;
+        en:menu_6) echo "  6) Switch language / 切换语言 (current: English)" ;;
+        zh:menu_prompt) echo "请输入选项 [1-6]（默认: 1）: " ;;
+        en:menu_prompt) echo "Enter choice [1-6] (default: 1): " ;;
+        zh:lang_switched) echo "已切换界面语言为中文。" ;;
+        en:lang_switched) echo "UI language switched to English." ;;
+        zh:pick_title) echo "请勾选要初始化的嵌套子模块" ;;
+        en:pick_title) echo "Select nested submodules to initialize" ;;
+        zh:pick_help) echo "  ↑/↓ 移动  空格勾选  a全选  n默认(无hw/plane_seg)  Enter确认  q取消" ;;
+        en:pick_help) echo "  ↑/↓ move  Space toggle  a all  n default(no hw/plane_seg)  Enter ok  q quit" ;;
+        zh:pick_cancelled) echo "已取消。" ;;
+        en:pick_cancelled) echo "Cancelled." ;;
+        zh:pick_notty_title) echo "请勾选要初始化的嵌套子模块（非 TTY）" ;;
+        en:pick_notty_title) echo "Select nested submodules (non-TTY)" ;;
+        zh:pick_notty_help) echo "  回车=默认(public 无 hardware)    a=全选    序号=在默认之外额外勾选" ;;
+        en:pick_notty_help) echo "  Enter=default(public, no hardware)    a=all    numbers=add to default" ;;
+        zh:pick_notty_prompt) echo "输入序号（空格分隔）: " ;;
+        en:pick_notty_prompt) echo "Enter numbers (space-separated): " ;;
+        zh:pick_summary) echo "将初始化以下嵌套子模块（${INIT_MODE}）：" ;;
+        en:pick_summary) echo "Will initialize these nested submodules (${INIT_MODE}):" ;;
+        zh:core_mode_title) echo "选择核心模块安装方式" ;;
+        en:core_mode_title) echo "Select core module install mode" ;;
+        zh:core_mode_help) echo "  ↑/↓ 移动  空格切换 deb/source  d/s 指定  Enter确认  q取消" ;;
+        en:core_mode_help) echo "  ↑/↓ move  Space toggle deb/source  d/s set  Enter ok  q quit" ;;
+        zh:core_mode_hint) echo "  提示: arms=deb 时会自动使用 ocs2=deb、common=deb" ;;
+        en:core_mode_hint) echo "  Note: arms=deb forces ocs2=deb and common=deb" ;;
+        zh:core_default_prefix) echo "默认" ;;
+        en:core_default_prefix) echo "default" ;;
+        zh:nested_for_switch) echo "嵌套子模块（仅当有模块改为源码时才会用到）：" ;;
+        en:nested_for_switch) echo "Nested submodules (used only when a module switches to source):" ;;
+        zh:current_module_state) echo "当前模块状态：" ;;
+        en:current_module_state) echo "Current module state:" ;;
+        zh:deb_only_prompt_title) echo "选择要安装/更新的包（逗号分隔短名，回车=全部）：" ;;
+        en:deb_only_prompt_title) echo "Packages to install/update (comma-separated short names; Enter=all):" ;;
+        zh:deb_uninstall_prompt_title) echo "选择要卸载的包（逗号分隔短名，回车=全部）：" ;;
+        en:deb_uninstall_prompt_title) echo "Packages to uninstall (comma-separated short names; Enter=all):" ;;
+        zh:pkg_list_prompt) echo "包列表: " ;;
+        en:pkg_list_prompt) echo "Package list: " ;;
+        zh:switch_target_title) echo "为每个模块选择目标（s=source, d=deb, k=保持），回车=保持：" ;;
+        en:switch_target_title) echo "Choose target per module (s=source, d=deb, k=keep); Enter=keep:" ;;
+        zh:switch_target_hint) echo "  注意：选「保持」或目标与当前一致时，不会对该模块做任何 git/deb 操作。" ;;
+        en:switch_target_hint) echo "  Note: keep / unchanged target skips git/deb ops for that module." ;;
+        zh:switch_target_prompt_suffix) echo "当前" ;;
+        en:switch_target_prompt_suffix) echo "current" ;;
+        *) echo "[$1]" ;;
+    esac
+}
+
+load_ui_lang_from_state() {
+    local saved
+    if [ -f "$MODE_STATE_FILE" ]; then
+        saved="$(grep -E '^UI_LANG=' "$MODE_STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
+        case "$saved" in
+            zh|en) UI_LANG="$saved" ;;
+        esac
+    fi
+}
+
+normalize_ui_lang() {
+    case "$1" in
+        zh|zh-CN|zh_CN|cn|CN|chinese|Chinese) echo "zh" ;;
+        en|en-US|en_US|english|English) echo "en" ;;
+        *) return 1 ;;
+    esac
+}
+
+VISIBILITY_CONF="$REPO_DIR/submodules_visibility.conf"
+NESTED_PUBLIC_SPECS=()
+NESTED_PRIVATE_SPECS=()
+SELECTED_NESTED_SPECS=()
+CATALOG_PARENT=()
+CATALOG_PATH=()
+CATALOG_VIS=()
+CATALOG_SEL=()
+CATALOG_N=0
+VISIBILITY_LOADED=0
+
+trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; echo "${v%"${v##*[![:space:]]}"}"; }
+
+load_visibility_conf() {
+    if [ ! -f "$VISIBILITY_CONF" ]; then
+        print_error "未找到配置文件: $VISIBILITY_CONF"
+        exit 1
+    fi
+    NESTED_PUBLIC_SPECS=()
+    NESTED_PRIVATE_SPECS=()
+    local line parent_dir relative_path visibility gitmodules_file spec
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+        line="$(trim "$line")"
+        [ -z "$line" ] && continue
+        IFS='|' read -r parent_dir relative_path visibility <<< "$line"
+        parent_dir=$(trim "$parent_dir")
+        relative_path=$(trim "$relative_path")
+        visibility=$(trim "$visibility")
+        gitmodules_file="${parent_dir}/.gitmodules"
+        spec="${parent_dir}:${gitmodules_file}:${relative_path}"
+        case "$visibility" in
+            public)  NESTED_PUBLIC_SPECS+=("$spec") ;;
+            private) NESTED_PRIVATE_SPECS+=("$spec") ;;
+            *)       print_warn "未知可见性 '$visibility'，跳过: $parent_dir/$relative_path" ;;
+        esac
+    done < "$VISIBILITY_CONF"
+    VISIBILITY_LOADED=1
+    print_info "已从 $VISIBILITY_CONF 加载嵌套子模块配置（public: ${#NESTED_PUBLIC_SPECS[@]} 项, private: ${#NESTED_PRIVATE_SPECS[@]} 项）"
+}
+
+# 默认不勾选（仍在列表，可用空格 / a 选上）：hardware、plane_segmentation、FiveAges Gen1 等
+is_default_unchecked_nested_path() {
+    case "$1" in
+        hardwares|hardwares/*) return 0 ;;
+        submodules/plane_segmentation_ros2) return 0 ;;
+        plane_segmentation_ros2) return 0 ;;
+        humanoid/FiveAges/Gen1/*|*/FiveAges/Gen1/*) return 0 ;;
+        humanoid/FiveAges/Gen1/fiveages_w1_description) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+CATALOG_LABEL_SHORT=()
+
+catalog_add() {
+    local parent="$1" path="$2" vis="$3"
+    local lab="${parent}/${path}"
+    CATALOG_PARENT+=("$parent")
+    CATALOG_PATH+=("$path")
+    CATALOG_VIS+=("$vis")
+    CATALOG_LABEL_SHORT+=("${lab#src/}")
+    # 默认：public 且非「默认不勾选」路径
+    if [ "$vis" = "public" ] && ! is_default_unchecked_nested_path "$path"; then
+        CATALOG_SEL+=(1)
+    else
+        CATALOG_SEL+=(0)
+    fi
+    CATALOG_N=$((CATALOG_N + 1))
+}
+
+catalog_label() {
+    echo "${CATALOG_PARENT[$1]}/${CATALOG_PATH[$1]}"
+}
+
+catalog_label_short() {
+    echo "${CATALOG_LABEL_SHORT[$1]}"
+}
+
+term_cols() { tput cols 2>/dev/null || echo 80; }
+term_lines() { tput lines 2>/dev/null || echo 24; }
+
+# 纯 ASCII 截断（路径）；无子进程
+truncate_ascii() {
+    local s="$1" max="$2"
+    [ "$max" -lt 8 ] && max=8
+    if [ "${#s}" -le "$max" ]; then
+        printf '%s' "$s"
+    else
+        printf '%s...' "${s:0:$((max - 3))}"
+    fi
+}
+
+# 标题/帮助可能含中文：非 ASCII 按 2 列；无子进程
+truncate_to_width() {
+    local s="$1" max="$2"
+    local i=0 ch o width=0 out=""
+    [ "$max" -lt 8 ] && max=8
+    if [[ "$s" =~ ^[\ $'\t'-~]*$ ]]; then
+        truncate_ascii "$s" "$max"
+        return 0
+    fi
+    while [ "$i" -lt "${#s}" ]; do
+        ch="${s:i:1}"
+        printf -v o '%d' "'$ch"
+        if [ "$o" -ge 0 ] && [ "$o" -lt 128 ]; then
+            [ $((width + 1)) -gt "$max" ] && break
+            out+="$ch"
+            width=$((width + 1))
+        else
+            [ $((width + 2)) -gt "$max" ] && break
+            out+="$ch"
+            width=$((width + 2))
+        fi
+        i=$((i + 1))
+    done
+    if [ "$i" -lt "${#s}" ]; then
+        while [ "$width" -gt $((max - 3)) ] && [ -n "$out" ]; do
+            ch="${out: -1}"
+            out="${out:0:${#out}-1}"
+            printf -v o '%d' "'$ch"
+            if [ "$o" -ge 0 ] && [ "$o" -lt 128 ]; then
+                width=$((width - 1))
+            else
+                width=$((width - 2))
+            fi
+        done
+        out+="..."
+    fi
+    printf '%s' "$out"
+}
+
+# arms/ocs2/common 用 deb 时，对应嵌套不必出现在勾选列表
+should_omit_nested_from_picker() {
+    local parent_dir="$1"
+    local relative_path="$2"
+    case "$parent_dir" in
+        src/arms_ros2_control)
+            [ "${USE_DEB_ARMS:-0}" -eq 1 ] && return 0
+            ;;
+        src/ocs2_ros2)
+            [ "${USE_DEB_OCS2:-0}" -eq 1 ] && return 0
+            ;;
+        src/robot-descriptions)
+            if [ "$relative_path" = "common" ] && [ "${USE_DEB_COMMON:-0}" -eq 1 ]; then
+                return 0
+            fi
+            ;;
+    esac
+    return 1
+}
+
+build_nested_catalog() {
+    CATALOG_PARENT=()
+    CATALOG_PATH=()
+    CATALOG_VIS=()
+    CATALOG_SEL=()
+    CATALOG_LABEL_SHORT=()
+    CATALOG_N=0
+    local spec parent_dir rest relative_path vis s
+    for spec in "${NESTED_PUBLIC_SPECS[@]+"${NESTED_PUBLIC_SPECS[@]}"}" "${NESTED_PRIVATE_SPECS[@]+"${NESTED_PRIVATE_SPECS[@]}"}"; do
+        [ -z "${spec:-}" ] && continue
+        parent_dir="${spec%%:*}"
+        rest="${spec#*:}"
+        relative_path="${rest#*:}"
+        if should_omit_nested_from_picker "$parent_dir" "$relative_path"; then
+            continue
+        fi
+        vis="private"
+        for s in "${NESTED_PUBLIC_SPECS[@]+"${NESTED_PUBLIC_SPECS[@]}"}"; do
+            [ "$s" = "$spec" ] && vis="public" && break
+        done
+        catalog_add "$parent_dir" "$relative_path" "$vis"
+    done
+}
+
+catalog_reset_public() {
+    # 与默认勾选一致：public，不含 hardwares/、plane_segmentation、FiveAges Gen1
+    local i
+    for ((i = 0; i < CATALOG_N; i++)); do
+        if [ "${CATALOG_VIS[$i]}" = "public" ] && ! is_default_unchecked_nested_path "${CATALOG_PATH[$i]}"; then
+            CATALOG_SEL[$i]=1
+        else
+            CATALOG_SEL[$i]=0
+        fi
+    done
+}
+
+catalog_select_all() {
+    local i
+    for ((i = 0; i < CATALOG_N; i++)); do
+        CATALOG_SEL[$i]=1
+    done
+}
+
+apply_catalog_selection() {
+    local i parent_dir relative_path gitmodules_file has_private=0
+    SELECTED_NESTED_SPECS=()
+    for ((i = 0; i < CATALOG_N; i++)); do
+        [ "${CATALOG_SEL[$i]}" = "1" ] || continue
+        parent_dir="${CATALOG_PARENT[$i]}"
+        relative_path="${CATALOG_PATH[$i]}"
+        gitmodules_file="${parent_dir}/.gitmodules"
+        SELECTED_NESTED_SPECS+=("${parent_dir}:${gitmodules_file}:${relative_path}")
+        if [ "${CATALOG_VIS[$i]}" = "private" ]; then
+            has_private=1
+        fi
+    done
+    if [ "$has_private" -eq 1 ]; then
+        INIT_MODE="private"
+    else
+        INIT_MODE="public"
+    fi
+}
+
+# ════════════════════════════════════════════════════════════════
+# 全屏列表 UI（核心模块 / 嵌套子模块共用）
+# - 行差量刷新：不每次 \033[2J，避免整屏闪
+# - DEC 2026 同步输出：多行更新原子提交（支持的终端）
+# ════════════════════════════════════════════════════════════════
+
+enter_fullscreen() {
+    local enable_mouse="${1:-1}"
+    if tput smcup 2>/dev/null; then
+        :
+    else
+        printf '\033[?1049h'
+    fi
+    printf '\033[?25l'
+    if [ "$enable_mouse" = "1" ]; then
+        printf '\033[?1000h\033[?1006h'
+    fi
+}
+
+leave_fullscreen() {
+    printf '\033[?1006l\033[?1000l'
+    printf '\033[?25h'
+    if tput rmcup 2>/dev/null; then
+        :
+    else
+        printf '\033[?1049l'
+    fi
+}
+
+# 排空多余 CSI（鼠标滚轮等），超时尽量短
+drain_csi() {
+    local ch
+    while IFS= read -rsn1 -t 0.001 ch; do
+        case "$ch" in
+            ''|[A-Za-z~Mm]) break ;;
+        esac
+    done
+}
+
+# 帧缓冲：FS_OLD_LINE[row]=上次内容；FLUSH 只写变化行
+FS_LINES=24
+FS_COLS=80
+FS_OLD_LINE=()
+FS_NEW_LINE=()
+FS_KEY=""
+WINCH_FLAG=0
+
+fs_frame_invalidate() {
+    FS_OLD_LINE=()
+}
+
+fs_frame_begin() {
+    FS_COLS=$(term_cols)
+    FS_LINES=$(term_lines)
+    [ "$FS_COLS" -lt 20 ] && FS_COLS=20
+    [ "$FS_LINES" -lt 4 ] && FS_LINES=4
+    PICKER_LINES=$FS_LINES
+    FS_NEW_LINE=()
+}
+
+fs_frame_put() {
+    FS_NEW_LINE[$1]="$2"
+}
+
+# 填满 1..FS_LINES，未 put 的行视为空（清残留）
+fs_frame_flush() {
+    local r text old
+    printf '\033[?2026h'
+    for ((r = 1; r <= FS_LINES; r++)); do
+        text="${FS_NEW_LINE[$r]-}"
+        old="${FS_OLD_LINE[$r]-}"
+        if [ "$text" != "$old" ]; then
+            printf '\033[%d;1H\033[2K%s' "$r" "$text"
+            FS_OLD_LINE[$r]="$text"
+        fi
+    done
+    printf '\033[?2026l'
+}
+
+# 读一键：设置 FS_KEY = UP|DOWN|SPACE|ENTER|QUIT|TIMEOUT|WINCH|CHAR:x|UNKNOWN
+# 依赖外部 WINCH_FLAG；mouse=1 时解析滚轮为 UP/DOWN
+fs_poll_key() {
+    local key="" k2="" k3="" c btn
+    if [ "${WINCH_FLAG:-0}" -eq 1 ]; then
+        FS_KEY=WINCH
+        return 0
+    fi
+    if ! IFS= read -rsn1 -t 0.2 key; then
+        if [ "${WINCH_FLAG:-0}" -eq 1 ]; then
+            FS_KEY=WINCH
+        else
+            FS_KEY=TIMEOUT
+        fi
+        return 0
+    fi
+    if [ "$key" = $'\x1b' ]; then
+        IFS= read -rsn1 -t 0.001 k2 || k2=""
+        if [ -z "$k2" ]; then
+            FS_KEY=UNKNOWN
+            return 0
+        fi
+        if [ "$k2" = "[" ]; then
+            IFS= read -rsn1 -t 0.001 k3 || k3=""
+            case "$k3" in
+                A) FS_KEY=UP; return 0 ;;
+                B) FS_KEY=DOWN; return 0 ;;
+                \<)
+                    btn=""
+                    while IFS= read -rsn1 -t 0.001 c; do
+                        case "$c" in
+                            [0-9]) btn+="$c" ;;
+                            \;|[Mm]) break ;;
+                            *) break ;;
+                        esac
+                    done
+                    drain_csi
+                    if [ "$btn" = "64" ]; then
+                        FS_KEY=UP
+                    elif [ "$btn" = "65" ]; then
+                        FS_KEY=DOWN
+                    else
+                        FS_KEY=UNKNOWN
+                    fi
+                    return 0
+                    ;;
+                M)
+                    IFS= read -rsn1 -t 0.001 _ || true
+                    IFS= read -rsn1 -t 0.001 _ || true
+                    IFS= read -rsn1 -t 0.001 _ || true
+                    FS_KEY=UNKNOWN
+                    return 0
+                    ;;
+                *)
+                    drain_csi
+                    FS_KEY=UNKNOWN
+                    return 0
+                    ;;
+            esac
+        fi
+        FS_KEY=UNKNOWN
+        return 0
+    elif [ "$key" = " " ]; then
+        FS_KEY=SPACE
+    elif [ "$key" = "q" ] || [ "$key" = "Q" ]; then
+        FS_KEY=QUIT
+    elif [ -z "$key" ]; then
+        FS_KEY=ENTER
+    else
+        FS_KEY="CHAR:$key"
+    fi
+}
+
+# 二级路径分组键：robot-descriptions/manipulator、arms_ros2_control/hardwares …
+picker_group_key() {
+    local lab="$1" a rest b
+    a="${lab%%/*}"
+    rest="${lab#*/}"
+    if [ "$rest" = "$lab" ]; then
+        printf '%s' "$a"
+    else
+        b="${rest%%/*}"
+        printf '%s/%s' "$a" "$b"
+    fi
+}
+
+# 构建显示行：item:<catalog_idx> 或 sep（组间空行）
+build_picker_display() {
+    local i prev="" group lab
+    PICKER_DISP=()
+    PICKER_DISP_N=0
+    CATALOG_TO_DISP=()
+    for ((i = 0; i < CATALOG_N; i++)); do
+        lab="${CATALOG_LABEL_SHORT[$i]}"
+        group="$(picker_group_key "$lab")"
+        if [ -n "$prev" ] && [ "$group" != "$prev" ]; then
+            PICKER_DISP+=("sep")
+            PICKER_DISP_N=$((PICKER_DISP_N + 1))
+        fi
+        CATALOG_TO_DISP[$i]=$PICKER_DISP_N
+        PICKER_DISP+=("item:$i")
+        PICKER_DISP_N=$((PICKER_DISP_N + 1))
+        prev="$group"
+    done
+}
+
+# 列表行文本（路径为 ASCII，用 truncate_ascii）
+picker_item_line() {
+    local i="$1" cur="$2" cols="$3"
+    local mark vis_tag prefix
+    if [ "${CATALOG_SEL[$i]}" = "1" ]; then
+        mark="[x]"
+    else
+        mark="[ ]"
+    fi
+    vis_tag="${CATALOG_VIS[$i]}"
+    if [ "$i" -eq "$cur" ]; then
+        prefix=" > $mark [$vis_tag]  "
+    else
+        prefix="   $mark [$vis_tag]  "
+    fi
+    truncate_ascii "${prefix}${CATALOG_LABEL_SHORT[$i]}" "$cols"
+}
+
+picker_footer_line() {
+    local cur="$1" win_start="$2" visible="$3" cols="$4" disp_n="$5"
+    local end=$((win_start + visible)) line
+    [ "$end" -gt "$disp_n" ] && end=$disp_n
+    if [ "$UI_LANG" = "en" ]; then
+        line="  ($((cur + 1))/$CATALOG_N)  up/down scroll"
+    else
+        line="  ($((cur + 1))/$CATALOG_N)  上下滚动"
+    fi
+    if [ "$win_start" -gt 0 ] || [ "$end" -lt "$disp_n" ]; then
+        line="$line  ..."
+    fi
+    truncate_ascii "$line" "$cols"
+}
+
+# ── 核心模块：deb|source 全屏选择 ───────────────────────────────
+pick_core_module_modes() {
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        msg core_mode_title
+        prompt_sd "  ocs2_ros2              $(msg core_default_prefix) $(mode_label "$USE_DEB_OCS2")" \
+            "$( [ "$USE_DEB_OCS2" -eq 1 ] && echo d || echo s )" USE_DEB_OCS2
+        prompt_sd "  arms_ros2_control      $(msg core_default_prefix) $(mode_label "$USE_DEB_ARMS")" \
+            "$( [ "$USE_DEB_ARMS" -eq 1 ] && echo d || echo s )" USE_DEB_ARMS
+        prompt_sd "  robot-descriptions/common $(msg core_default_prefix) $(mode_label "$USE_DEB_COMMON")" \
+            "$( [ "$USE_DEB_COMMON" -eq 1 ] && echo d || echo s )" USE_DEB_COMMON
+        return 0
+    fi
+    pick_core_modes_tty
+}
+
+pick_core_modes_tty() {
+    local idx=0
+    local names=( "ocs2_ros2" "arms_ros2_control" "robot-descriptions/common" )
+    local modes=( "$USE_DEB_OCS2" "$USE_DEB_ARMS" "$USE_DEB_COMMON" )
+    local n=3
+    local old_stty picker_active=0
+    local title_line help_line hint_line
+    local list_top=5
+    old_stty=$(stty -g)
+    WINCH_FLAG=0
+    fs_frame_invalidate
+
+    leave_core_picker() {
+        trap - WINCH
+        if [ "$picker_active" -eq 1 ]; then
+            leave_fullscreen
+            picker_active=0
+        fi
+        stty "$old_stty" 2>/dev/null || true
+    }
+    on_core_winch() { WINCH_FLAG=1; }
+    trap leave_core_picker EXIT INT TERM
+    trap on_core_winch WINCH
+
+    apply_arms_deb_constraint() {
+        if [ "${modes[1]}" -eq 1 ]; then
+            modes[0]=1
+            modes[2]=1
+        fi
+    }
+
+    core_row_text() {
+        local i="$1" cur="$2" cols="$3"
+        local mode_s prefix
+        if [ "${modes[$i]}" -eq 1 ]; then
+            mode_s="deb   "
+        else
+            mode_s="source"
+        fi
+        if [ "$i" -eq "$cur" ]; then
+            prefix=" > "
+        else
+            prefix="   "
+        fi
+        truncate_ascii "${prefix}[${mode_s}]  ${names[$i]}" "$cols"
+    }
+
+    # 整屏逻辑内容写入帧缓冲后差量 flush（无 2J）
+    redraw_core() {
+        local i r
+        fs_frame_begin
+        if [ "$FS_LINES" -lt 8 ]; then
+            list_top=3
+            help_line="$(truncate_to_width "$(msg core_mode_help)" "$FS_COLS")"
+            fs_frame_put 1 "$help_line"
+            fs_frame_put 2 ""
+        else
+            list_top=5
+            title_line="$(truncate_to_width "$(msg core_mode_title)" "$FS_COLS")"
+            help_line="$(truncate_to_width "$(msg core_mode_help)" "$FS_COLS")"
+            hint_line="$(truncate_to_width "$(msg core_mode_hint)" "$FS_COLS")"
+            fs_frame_put 1 "$title_line"
+            fs_frame_put 2 "$help_line"
+            fs_frame_put 3 "$hint_line"
+            fs_frame_put 4 ""
+        fi
+        for ((i = 0; i < n; i++)); do
+            fs_frame_put $((list_top + i)) "$(core_row_text "$i" "$idx" "$FS_COLS")"
+        done
+        # 其余行由 flush 写成空，清掉缩放残留
+        fs_frame_flush
+        WINCH_FLAG=0
+    }
+
+    stty -echo -icanon
+    enter_fullscreen 0
+    picker_active=1
+    apply_arms_deb_constraint
+    redraw_core
+
+    while true; do
+        fs_poll_key
+        case "$FS_KEY" in
+            WINCH|TIMEOUT)
+                [ "$FS_KEY" = "WINCH" ] && redraw_core
+                continue
+                ;;
+            UP)
+                idx=$(( (idx - 1 + n) % n ))
+                redraw_core
+                ;;
+            DOWN)
+                idx=$(( (idx + 1) % n ))
+                redraw_core
+                ;;
+            SPACE)
+                if [ "${modes[$idx]}" -eq 1 ]; then
+                    modes[$idx]=0
+                else
+                    modes[$idx]=1
+                fi
+                apply_arms_deb_constraint
+                redraw_core
+                ;;
+            CHAR:d|CHAR:D)
+                modes[$idx]=1
+                apply_arms_deb_constraint
+                redraw_core
+                ;;
+            CHAR:s|CHAR:S)
+                modes[$idx]=0
+                apply_arms_deb_constraint
+                redraw_core
+                ;;
+            QUIT)
+                leave_core_picker
+                trap - EXIT INT TERM
+                msg pick_cancelled
+                exit 0
+                ;;
+            ENTER)
+                USE_DEB_OCS2="${modes[0]}"
+                USE_DEB_ARMS="${modes[1]}"
+                USE_DEB_COMMON="${modes[2]}"
+                apply_arms_deb_constraint
+                USE_DEB_OCS2="${modes[0]}"
+                USE_DEB_ARMS="${modes[1]}"
+                USE_DEB_COMMON="${modes[2]}"
+                leave_core_picker
+                trap - EXIT INT TERM
+                print_info "核心模块: ocs2=$(mode_label "$USE_DEB_OCS2"), arms=$(mode_label "$USE_DEB_ARMS"), common=$(mode_label "$USE_DEB_COMMON")"
+                break
+                ;;
+        esac
+    done
+}
+
+# ── 嵌套子模块全屏勾选 ─────────────────────────────────────────
+pick_submodules_tty() {
+    local idx=0
+    local header=3 footer=1 visible win_start=0
+    local old_stty picker_active=0
+    local title_line help_line
+    local list_top=4
+    local disp_idx=0
+    local prev_cols=0 prev_lines=0
+    PICKER_DISP=()
+    PICKER_DISP_N=0
+    CATALOG_TO_DISP=()
+    old_stty=$(stty -g)
+    WINCH_FLAG=0
+    fs_frame_invalidate
+
+    leave_picker_screen() {
+        trap - WINCH
+        if [ "$picker_active" -eq 1 ]; then
+            leave_fullscreen
+            picker_active=0
+        fi
+        stty "$old_stty" 2>/dev/null || true
+    }
+    on_winch() { WINCH_FLAG=1; }
+    trap leave_picker_screen EXIT INT TERM
+    trap on_winch WINCH
+
+    build_picker_display
+    disp_idx=${CATALOG_TO_DISP[0]:-0}
+    idx=0
+
+    stty -echo -icanon
+    enter_fullscreen 1
+    picker_active=1
+
+    sync_window() {
+        fs_frame_begin
+        if [ "$FS_LINES" -lt 8 ]; then
+            header=2
+            list_top=3
+            footer=1
+        else
+            header=3
+            list_top=4
+            footer=1
+        fi
+        visible=$((FS_LINES - header - footer))
+        [ "$visible" -lt 1 ] && visible=1
+        [ "$visible" -gt "$PICKER_DISP_N" ] && visible=$PICKER_DISP_N
+
+        disp_idx=${CATALOG_TO_DISP[$idx]:-0}
+        if [ "$disp_idx" -lt "$win_start" ]; then
+            win_start=$disp_idx
+        elif [ "$disp_idx" -ge $((win_start + visible)) ]; then
+            win_start=$((disp_idx - visible + 1))
+        fi
+        [ "$win_start" -lt 0 ] && win_start=0
+        local max_start=$((PICKER_DISP_N - visible))
+        [ "$max_start" -lt 0 ] && max_start=0
+        [ "$win_start" -gt "$max_start" ] && win_start=$max_start
+
+        if [ "$FS_COLS" -ne "$prev_cols" ] || [ "$FS_LINES" -ne "$prev_lines" ]; then
+            fs_frame_invalidate
+        fi
+    }
+
+    paint_disp_into_frame() {
+        local d="$1" screen_row="$2" cur="$3"
+        local ent cat_i
+        ent="${PICKER_DISP[$d]-sep}"
+        case "$ent" in
+            item:*)
+                cat_i="${ent#item:}"
+                fs_frame_put "$screen_row" "$(picker_item_line "$cat_i" "$cur" "$FS_COLS")"
+                ;;
+            *)
+                fs_frame_put "$screen_row" ""
+                ;;
+        esac
+    }
+
+    redraw_list() {
+        local d end r footer_row
+        sync_window
+        if [ "$header" -ge 3 ]; then
+            title_line="$(truncate_to_width "$(msg pick_title)" "$FS_COLS")"
+            help_line="$(truncate_to_width "$(msg pick_help)" "$FS_COLS")"
+            fs_frame_put 1 "$title_line"
+            fs_frame_put 2 "$help_line"
+            fs_frame_put 3 ""
+        else
+            help_line="$(truncate_to_width "$(msg pick_help)" "$FS_COLS")"
+            fs_frame_put 1 "$help_line"
+            fs_frame_put 2 ""
+        fi
+        end=$((win_start + visible))
+        [ "$end" -gt "$PICKER_DISP_N" ] && end=$PICKER_DISP_N
+        r=$list_top
+        for ((d = win_start; d < end; d++)); do
+            paint_disp_into_frame "$d" "$r" "$idx"
+            r=$((r + 1))
+        done
+        footer_row=$((list_top + visible))
+        [ "$footer_row" -gt "$FS_LINES" ] && footer_row=$FS_LINES
+        fs_frame_put "$footer_row" "$(picker_footer_line "$idx" "$win_start" "$visible" "$FS_COLS" "$PICKER_DISP_N")"
+        fs_frame_flush
+        prev_cols=$FS_COLS
+        prev_lines=$FS_LINES
+        WINCH_FLAG=0
+    }
+
+    move_sel() {
+        local dir="$1"
+        local next=$((idx + dir))
+        if [ "$next" -lt 0 ]; then
+            next=$((CATALOG_N - 1))
+        elif [ "$next" -ge "$CATALOG_N" ]; then
+            next=0
+        fi
+        idx=$next
+    }
+
+    redraw_list
+    while true; do
+        fs_poll_key
+        case "$FS_KEY" in
+            WINCH)
+                redraw_list
+                ;;
+            TIMEOUT)
+                continue
+                ;;
+            UP)
+                move_sel -1
+                redraw_list
+                ;;
+            DOWN)
+                move_sel 1
+                redraw_list
+                ;;
+            SPACE)
+                CATALOG_SEL[$idx]=$((1 - CATALOG_SEL[$idx]))
+                redraw_list
+                ;;
+            CHAR:a|CHAR:A)
+                catalog_select_all
+                redraw_list
+                ;;
+            CHAR:n|CHAR:N)
+                catalog_reset_public
+                redraw_list
+                ;;
+            QUIT)
+                leave_picker_screen
+                trap - EXIT INT TERM
+                msg pick_cancelled
+                exit 0
+                ;;
+            ENTER)
+                leave_picker_screen
+                trap - EXIT INT TERM
+                break
+                ;;
+        esac
+    done
+}
+
+pick_submodules_notty() {
+    local i mark vis_tag input n prev="" group
+    msg pick_notty_title
+    msg pick_notty_help
+    echo ""
+    for ((i = 0; i < CATALOG_N; i++)); do
+        group="$(picker_group_key "${CATALOG_LABEL_SHORT[$i]}")"
+        if [ -n "$prev" ] && [ "$group" != "$prev" ]; then
+            echo ""
+        fi
+        prev="$group"
+        if [ "${CATALOG_SEL[$i]}" = "1" ]; then
+            mark="[x]"
+        else
+            mark="[ ]"
+        fi
+        vis_tag="${CATALOG_VIS[$i]}"
+        printf "  %2d) %s [%s]  %s\n" "$((i + 1))" "$mark" "$vis_tag" "${CATALOG_LABEL_SHORT[$i]}"
+    done
+    echo ""
+    read -rp "$(msg pick_notty_prompt)" input
+    case "$input" in
+        a|A) catalog_select_all ;;
+        "") ;;
+        *)
+            catalog_reset_public
+            for n in $input; do
+                if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "$CATALOG_N" ]; then
+                    CATALOG_SEL[$((n - 1))]=1
+                else
+                    print_warn "忽略无效序号: $n"
+                fi
+            done
+            ;;
+    esac
+}
+
+pick_nested_submodules() {
+    if [ "$CATALOG_N" -eq 0 ]; then
+        SELECTED_NESTED_SPECS=()
+        if [ "${USE_DEB_ARMS:-0}" -eq 1 ] && [ "${USE_DEB_OCS2:-0}" -eq 1 ]; then
+            print_info "arms/ocs2 均为 deb，且无其余可选嵌套，跳过勾选"
+        else
+            print_info "当前 source/deb 选择下无需勾选嵌套子模块"
+        fi
+        return 0
+    fi
+    if [ -t 0 ] && [ -t 1 ]; then
+        pick_submodules_tty
+    else
+        pick_submodules_notty
+    fi
+    apply_catalog_selection
+    local i
+    print_info "$(msg pick_summary)"
+    for ((i = 0; i < CATALOG_N; i++)); do
+        if [ "${CATALOG_SEL[$i]}" = "1" ]; then
+            print_info "  - $(catalog_label "$i") (${CATALOG_VIS[$i]})"
+        fi
+    done
+}
+
+apply_visibility_preset() {
+    local mode="$1"
+    build_nested_catalog
+    case "$mode" in
+        public) catalog_reset_public ;;  # public，默认不含 hardwares/、plane_segmentation
+        private) catalog_select_all ;;   # 全部（含 private + 默认可选项）
+        *)
+            print_error "无效可见性预设: $mode（可用: public, private）"
+            exit 1
+            ;;
+    esac
+    apply_catalog_selection
+    print_info "嵌套子模块预设: $mode（已选 ${#SELECTED_NESTED_SPECS[@]} 项；默认不含 hardwares/、plane_segmentation、FiveAges Gen1）"
+}
+
+ensure_nested_selection() {
+    # 交互：勾选；非交互 / 已传 --public|--private：按预设
+    if [ "$VISIBILITY_LOADED" -eq 0 ]; then
+        load_visibility_conf
+    fi
+    build_nested_catalog
+    if [ -n "$CLI_VIS" ] || [ "$NONINTERACTIVE" -eq 1 ]; then
+        apply_visibility_preset "${CLI_VIS:-$INIT_MODE}"
+    else
+        pick_nested_submodules
+    fi
+}
 
 run_rosdep_install() {
     print_info "运行: rosdep install --from-paths src --ignore-src -r -y"
@@ -100,11 +1028,12 @@ run_uninstall_core_debs() {
 
 save_module_mode_state() {
     cat > "$MODE_STATE_FILE" <<EOF
-# 上次 init_repo.sh 选择的模块安装方式（deb=1 / source=0）
+# 上次 init_repo.sh 选择的模块安装方式（deb=1 / source=0）与界面语言
 INIT_MODE=$INIT_MODE
 USE_DEB_OCS2=$USE_DEB_OCS2
 USE_DEB_ARMS=$USE_DEB_ARMS
 USE_DEB_COMMON=$USE_DEB_COMMON
+UI_LANG=$UI_LANG
 EOF
 }
 
@@ -250,9 +1179,10 @@ usage() {
 非交互初始化（与交互默认值一致: public, ocs2=deb, arms=source, common=source）:
   ./init_repo.sh --public --ocs2=deb --arms=source --common=source
 
-可见性:
-  --public              仅初始化 public 嵌套子模块（默认）
-  --private             含 private 嵌套（需要仓库访问权限）
+嵌套子模块（交互时可勾选；非交互用预设）:
+  --public              仅 public 嵌套，默认不含 hardwares/、plane_segmentation（可再勾选）
+  --private             全部嵌套（含 private + 默认可选项，需要仓库访问权限）
+  交互界面: ↑/↓ 移动  空格勾选  a 全选  n 恢复默认  Enter 确认
 
 核心模块安装方式:
   --ocs2=deb|source     默认 deb
@@ -268,6 +1198,7 @@ usage() {
   --only <list>         配合 --deb-only / --deb-uninstall，逗号分隔短名
 
 其他:
+  --lang=zh|en          界面语言（交互菜单也可选「切换语言」）
   --https               强制将 GitHub SSH 子模块 URL 按 HTTPS 拉取
   --non-interactive     跳过所有提示（传入 --public/--private 或模块参数时也会自动进入）
   -y, --yes             非交互确认（如清理将改由 deb 提供的源码目录）
@@ -276,6 +1207,7 @@ usage() {
 环境变量（命令行优先）:
   OPEN_DEPLOY_NONINTERACTIVE=1
   OPEN_DEPLOY_VISIBILITY=public|private
+  OPEN_DEPLOY_LANG=zh|en
   OPEN_DEPLOY_OCS2=deb|source
   OPEN_DEPLOY_ARMS=deb|source
   OPEN_DEPLOY_COMMON=deb|source
@@ -501,6 +1433,12 @@ apply_env_overrides() {
         CLI_VIS="${OPEN_DEPLOY_VISIBILITY}"
         NONINTERACTIVE=1
     fi
+    if [ -z "$CLI_LANG" ] && [ -n "${OPEN_DEPLOY_LANG:-}" ]; then
+        CLI_LANG="$(normalize_ui_lang "${OPEN_DEPLOY_LANG}")" || {
+            print_error "无效的 OPEN_DEPLOY_LANG=${OPEN_DEPLOY_LANG}（可用: zh, en）"
+            exit 1
+        }
+    fi
     if [ -z "$CLI_FLOW" ] && [ -n "${OPEN_DEPLOY_FLOW:-}" ]; then
         CLI_FLOW="${OPEN_DEPLOY_FLOW}"
         NONINTERACTIVE=1
@@ -554,6 +1492,13 @@ while [ $# -gt 0 ]; do
             }
             CLI_VIS="private"
             NONINTERACTIVE=1
+            shift
+            ;;
+        --lang=*)
+            CLI_LANG="$(normalize_ui_lang "${1#*=}")" || {
+                print_error "无效的 --lang 值: ${1#*=}（可用: zh, en）"
+                exit 1
+            }
             shift
             ;;
         --ocs2=*)
@@ -659,6 +1604,12 @@ done
 
 apply_env_overrides
 
+# 界面语言：命令行 / 环境变量 > 上次状态 > 默认 zh
+load_ui_lang_from_state
+if [ -n "$CLI_LANG" ]; then
+    UI_LANG="$CLI_LANG"
+fi
+
 if [ -n "$CLI_FLOW" ]; then
     case "$CLI_FLOW" in
         init|switch|deb_only|deb_uninstall|rosdep) FLOW="$CLI_FLOW" ;;
@@ -693,28 +1644,54 @@ if [ ! -d ".git" ]; then
     exit 1
 fi
 
-# 选择流程
+toggle_ui_lang() {
+    if [ "$UI_LANG" = "en" ]; then
+        UI_LANG="zh"
+    else
+        UI_LANG="en"
+    fi
+    # 仅更新语言字段，保留其它已保存的模块方式
+    if [ -f "$MODE_STATE_FILE" ]; then
+        if grep -qE '^UI_LANG=' "$MODE_STATE_FILE" 2>/dev/null; then
+            sed -i "s/^UI_LANG=.*/UI_LANG=$UI_LANG/" "$MODE_STATE_FILE"
+        else
+            printf 'UI_LANG=%s\n' "$UI_LANG" >> "$MODE_STATE_FILE"
+        fi
+    else
+        printf '# UI language only (module modes not chosen yet)\nUI_LANG=%s\n' "$UI_LANG" > "$MODE_STATE_FILE"
+    fi
+    msg lang_switched
+}
+
+# 选择流程（6 = 切换语言并重新显示菜单）
 if [ "$NONINTERACTIVE" -eq 0 ]; then
-    echo ""
-    echo "请选择操作："
-    echo ""
-    echo "  1) 初始化工作空间（嵌套可见性 + 逐模块 source/deb）"
-    echo "     默认推荐: ocs2=deb，arms=source，common=source"
-    echo "  2) 切换模块安装方式（源码 ↔ deb）"
-    echo "  3) 仅安装/更新核心 deb 包（跳过 Git 子模块拉取）"
-    echo "  4) 卸载核心 deb 包"
-    echo "  5) 仅运行 rosdep 安装依赖（rosdep install --from-paths src --ignore-src -r -y）"
-    echo ""
-    read -rp "请输入选项 [1/2/3/4/5]（默认: 1）: " flow_choice
-    case "$flow_choice" in
-        2) FLOW="switch" ;;
-        3) FLOW="deb_only" ;;
-        4) FLOW="deb_uninstall" ;;
-        5) FLOW="rosdep" ;;
-        *) FLOW="init" ;;
-    esac
+    while true; do
+        echo ""
+        msg menu_title
+        echo ""
+        msg menu_1
+        msg menu_1_hint
+        msg menu_2
+        msg menu_3
+        msg menu_4
+        msg menu_5
+        msg menu_6
+        echo ""
+        read -rp "$(msg menu_prompt)" flow_choice
+        case "$flow_choice" in
+            2) FLOW="switch"; break ;;
+            3) FLOW="deb_only"; break ;;
+            4) FLOW="deb_uninstall"; break ;;
+            5) FLOW="rosdep"; break ;;
+            6|l|L)
+                toggle_ui_lang
+                continue
+                ;;
+            *) FLOW="init"; break ;;
+        esac
+    done
 else
-    print_info "非交互模式: flow=$FLOW"
+    print_info "非交互模式: flow=$FLOW, lang=$UI_LANG"
 fi
 
 # ---------- 快捷：仅 rosdep ----------
@@ -730,9 +1707,9 @@ if [ "$FLOW" = "deb_only" ]; then
     only_choice="$CLI_ONLY"
     if [ "$NONINTERACTIVE" -eq 0 ]; then
         echo ""
-        echo "选择要安装/更新的包（逗号分隔短名，回车=全部）："
+        msg deb_only_prompt_title
         echo "  ocs2, common, arms"
-        read -rp "包列表: " only_choice
+        read -rp "$(msg pkg_list_prompt)" only_choice
         only_choice="$(echo "$only_choice" | tr -d '[:space:]')"
     fi
     print_info "模式: 仅安装核心 deb 包（不拉取 Git 子模块）"
@@ -747,9 +1724,9 @@ if [ "$FLOW" = "deb_uninstall" ]; then
     only_choice="$CLI_ONLY"
     if [ "$NONINTERACTIVE" -eq 0 ]; then
         echo ""
-        echo "选择要卸载的包（逗号分隔短名，回车=全部）："
+        msg deb_uninstall_prompt_title
         echo "  ocs2, common, arms"
-        read -rp "包列表: " only_choice
+        read -rp "$(msg pkg_list_prompt)" only_choice
         only_choice="$(echo "$only_choice" | tr -d '[:space:]')"
     fi
     print_info "模式: 卸载核心 deb 包"
@@ -780,28 +1757,14 @@ if [ "$FLOW" = "init" ]; then
     USE_DEB_ARMS="$_def_arms"
     USE_DEB_COMMON="$_def_common"
 
+    # 先选 source/deb（全屏），再勾选嵌套（deb 对应父仓的嵌套不会出现在列表里）
     if [ "$NONINTERACTIVE" -eq 0 ]; then
-        if [ -z "$CLI_VIS" ]; then
-            echo ""
-            echo "嵌套子模块可见性："
-            echo "  1) 仅 public（外部用户，无需私有仓库权限）"
-            echo "  2) 全部（含 private，需要内部仓库访问权限）"
-            read -rp "请输入选项 [1/2]（默认: 1）: " vis_choice
-            case "$vis_choice" in
-                2) INIT_MODE="private" ;;
-                *) INIT_MODE="public" ;;
-            esac
-        fi
-
         echo ""
-        echo "核心模块安装方式（d=deb, s=source，回车用括号内默认）："
-        prompt_sd "  ocs2_ros2              默认 $(mode_label "$USE_DEB_OCS2")" \
-            "$( [ "$USE_DEB_OCS2" -eq 1 ] && echo d || echo s )" USE_DEB_OCS2
-        prompt_sd "  arms_ros2_control      默认 $(mode_label "$USE_DEB_ARMS")" \
-            "$( [ "$USE_DEB_ARMS" -eq 1 ] && echo d || echo s )" USE_DEB_ARMS
-        prompt_sd "  robot-descriptions/common 默认 $(mode_label "$USE_DEB_COMMON")" \
-            "$( [ "$USE_DEB_COMMON" -eq 1 ] && echo d || echo s )" USE_DEB_COMMON
+        pick_core_module_modes
     fi
+
+    echo ""
+    ensure_nested_selection
 fi
 
 # switch 流程：仅对「安装方式真正变化」的模块动手；未改动的源码模块绝不 sync/update/pull/reset
@@ -838,31 +1801,23 @@ current_use_deb_from_state() {
 }
 
 if [ "$FLOW" = "switch" ]; then
-    # 先读上次可见性，避免覆盖稍后选择的 USE_DEB_*
+    # 切换安装方式：不勾选嵌套子模块；若改回 source，按上次/CLI 可见性预设拉嵌套
     _saved_init="public"
     if [ -f "$MODE_STATE_FILE" ]; then
         _saved_init="$(grep -E '^INIT_MODE=' "$MODE_STATE_FILE" 2>/dev/null | cut -d= -f2- || echo public)"
         [ -z "$_saved_init" ] && _saved_init="public"
     fi
-
     if [ -z "$CLI_VIS" ]; then
-        if [ "$NONINTERACTIVE" -eq 0 ]; then
-            echo ""
-            echo "嵌套可见性（仅当有模块改为源码时才会用到）："
-            echo "  1) public  2) private/全部"
-            read -rp "请输入选项 [1/2]（默认: $([ "$_saved_init" = private ] && echo 2 || echo 1)）: " vis_choice
-            case "$vis_choice" in
-                2) INIT_MODE="private" ;;
-                1) INIT_MODE="public" ;;
-                *) INIT_MODE="$_saved_init" ;;
-            esac
-        else
-            INIT_MODE="$_saved_init"
-        fi
+        CLI_VIS="$_saved_init"
     fi
+    INIT_MODE="$CLI_VIS"
+    if [ "$VISIBILITY_LOADED" -eq 0 ]; then
+        load_visibility_conf
+    fi
+    apply_visibility_preset "$CLI_VIS"
 
     echo ""
-    echo "当前模块状态："
+    msg current_module_state
     for m in ocs2 arms common; do
         p="$(module_short_to_path "$m")"
         pkg="$(module_short_to_deb "$m")"
@@ -907,14 +1862,14 @@ if [ "$FLOW" = "switch" ]; then
         done
     else
         echo ""
-        echo "为每个模块选择目标（s=source, d=deb, k=保持），回车=保持："
-        echo "  注意：选「保持」或目标与当前一致时，不会对该模块做任何 git/deb 操作。"
+        msg switch_target_title
+        msg switch_target_hint
         for m in ocs2 arms common; do
             p="$(module_short_to_path "$m")"
             pkg="$(module_short_to_deb "$m")"
             st="$(detect_module_state "$p" "$pkg")"
             cur_deb="$(current_use_deb_from_state "$st")"
-            read -rp "  $m 当前=$st [s/d/K]: " tgt
+            read -rp "  $m $(msg switch_target_prompt_suffix)=$st [s/d/K]: " tgt
             tgt="${tgt:-k}"
             local_target=""
             case "$tgt" in
@@ -1000,7 +1955,7 @@ if [ "$FLOW" = "init" ] && [ "$USE_DEB_ARMS" -eq 1 ]; then
     fi
 fi
 
-print_info "初始化模式（嵌套）: $INIT_MODE"
+print_info "嵌套子模块模式: $INIT_MODE（已选 ${#SELECTED_NESTED_SPECS[@]} 项）"
 print_info "模块方式: ocs2=$(mode_label "$USE_DEB_OCS2"), arms=$(mode_label "$USE_DEB_ARMS"), common=$(mode_label "$USE_DEB_COMMON")"
 echo ""
 
@@ -1176,33 +2131,10 @@ switch_uninstall_debs_for_source_targets() {
     run_uninstall_core_debs "$list" || print_warn "部分 deb 卸载失败，继续尝试源码初始化..."
 }
 
-# 嵌套子模块可见性配置文件
-VISIBILITY_CONF="$REPO_DIR/submodules_visibility.conf"
-if [ ! -f "$VISIBILITY_CONF" ]; then
-    print_error "未找到配置文件: $VISIBILITY_CONF"
-    exit 1
+# 嵌套选择应已在 init/switch 提示阶段完成；兜底再应用一次预设
+if [ "$VISIBILITY_LOADED" -eq 0 ] || [ ${#SELECTED_NESTED_SPECS[@]} -eq 0 ]; then
+    ensure_nested_selection
 fi
-trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; echo "${v%"${v##*[![:space:]]}"}"; }
-NESTED_PUBLIC_SPECS=()
-NESTED_PRIVATE_SPECS=()
-while IFS= read -r line || [ -n "$line" ]; do
-    line="${line%%#*}"
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line%"${line##*[![:space:]]}"}"
-    [ -z "$line" ] && continue
-    IFS='|' read -r parent_dir relative_path visibility <<< "$line"
-    parent_dir=$(trim "$parent_dir")
-    relative_path=$(trim "$relative_path")
-    visibility=$(trim "$visibility")
-    gitmodules_file="${parent_dir}/.gitmodules"
-    spec="${parent_dir}:${gitmodules_file}:${relative_path}"
-    case "$visibility" in
-        public)  NESTED_PUBLIC_SPECS+=("$spec") ;;
-        private) NESTED_PRIVATE_SPECS+=("$spec") ;;
-        *)       print_warn "未知可见性 '$visibility'，跳过: $parent_dir/$relative_path" ;;
-    esac
-done < "$VISIBILITY_CONF"
-print_info "已从 $VISIBILITY_CONF 加载嵌套子模块配置（public: ${#NESTED_PUBLIC_SPECS[@]} 项, private: ${#NESTED_PRIVATE_SPECS[@]} 项）"
 echo ""
 
 if [ "$FLOW" = "switch" ]; then
@@ -1360,7 +2292,7 @@ for submodule_path in $submodule_paths; do
 done
 
 # 初始化构建所需的嵌套子模块
-print_info "初始化构建所需的嵌套子模块（根据配置文件）..."
+print_info "初始化勾选的嵌套子模块..."
 init_one_nested_submodule() {
     local parent_dir="$1"
     local relative_path="$2"
@@ -1377,27 +2309,17 @@ init_one_nested_submodule() {
         || print_warn "$parent_dir/$relative_path 初始化失败，跳过"
 }
 
-for spec in "${NESTED_PUBLIC_SPECS[@]}"; do
+for spec in "${SELECTED_NESTED_SPECS[@]+"${SELECTED_NESTED_SPECS[@]}"}"; do
+    [ -z "${spec:-}" ] && continue
     parent_dir="${spec%%:*}"
     rest="${spec#*:}"
     relative_path="${rest#*:}"
     init_one_nested_submodule "$parent_dir" "$relative_path"
 done
-if [ "$INIT_MODE" = "private" ]; then
-    for spec in "${NESTED_PRIVATE_SPECS[@]}"; do
-        parent_dir="${spec%%:*}"
-        rest="${spec#*:}"
-        relative_path="${rest#*:}"
-        init_one_nested_submodule "$parent_dir" "$relative_path"
-    done
-fi
 
-print_info "将构建所需的嵌套子模块切换到对应分支..."
-nested_specs=("${NESTED_PUBLIC_SPECS[@]}")
-if [ "$INIT_MODE" = "private" ]; then
-    nested_specs+=("${NESTED_PRIVATE_SPECS[@]}")
-fi
-for nested_spec in "${nested_specs[@]}"; do
+print_info "将勾选的嵌套子模块切换到对应分支..."
+for nested_spec in "${SELECTED_NESTED_SPECS[@]+"${SELECTED_NESTED_SPECS[@]}"}"; do
+    [ -z "${nested_spec:-}" ] && continue
     parent_dir="${nested_spec%%:*}"
     rest="${nested_spec#*:}"
     gitmodules_file="${rest%%:*}"
